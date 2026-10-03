@@ -1,0 +1,10 @@
+{
+  "format": 1,
+  "repository": "ThijsVanZon/multi-repo-stack",
+  "applicability": "lifecycle",
+  "pstack": {
+    "repository": "cursor/plugins",
+    "commit": "7022c81efb48d8b5eb15498ce6043a3bd74b694c",
+    "path": "pstack"
+  }
+}
