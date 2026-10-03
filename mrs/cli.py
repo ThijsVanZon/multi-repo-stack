@@ -1,4 +1,5 @@
-"""Read-only commands: preflight, inspect, collect and assess. There is no mutation command."""
+"""Commands: preflight, inspect, collect, assess and task. They are read-only toward every target. The only write
+is `task create`, which adds one new branch to the caller's local checkout. There is no publication command."""
 
 from __future__ import annotations
 
@@ -8,7 +9,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from . import acceptance, collect, git, sources, state
+from . import acceptance, collect, git, sources, state, tasks
 
 OK, NOT_PASSED, REFUSED, UNKNOWN, INVALIDATED = 0, 1, 3, 4, 5
 _remove = collect.remove_tree
@@ -185,10 +186,42 @@ def _assess(args) -> int:
     return {acceptance.SUFFICIENT: OK, acceptance.INCOMPLETE: NOT_PASSED}.get(result.status, REFUSED)
 
 
+def _task(args) -> int:
+    scratch = tempfile.mkdtemp(prefix="mrs-task-")
+    try:
+        store = Path(scratch) / "observed.git"
+        git.check(["init", "--quiet", "--bare", "--template=", str(store)])
+        checkout = Path(args.checkout).resolve()
+        if args.task_command == "create":
+            report = tasks.create(store, args.repository, checkout, args.task)
+        else:
+            report = tasks.check(store, args.repository, checkout, args.branch, args.commit, args.base)
+    except (tasks.Refused, state.Redirected) as exc:
+        _print({"status": "REFUSED", "reason": str(exc)}, args.json, [f"TASK REFUSED: {exc}"])
+        return REFUSED
+    except (state.Unknown, git.GitError) as exc:
+        _print({"status": "UNKNOWN", "reason": str(exc)}, args.json, [f"TASK UNKNOWN: {exc}"])
+        return UNKNOWN
+    finally:
+        _remove(scratch)
+    if args.task_command == "create":
+        report["status"] = "CREATED"
+        _print(report, args.json, [f"TASK CREATED: {report['branch']} at dev {report['commit']} of "
+                                   f"{report['repository']}, in {checkout}; nothing else changed"])
+        return OK
+    _print(report, args.json, [
+        f"TASK {report['status']}: {report['branch']} at {report['commit']}, targeting {report['base']} "
+        f"({report['base_commit']}), against dev {report['dev']} of {report['repository']} on line {report['version']}",
+        *[f"problem   {problem}" for problem in report["problems"]],
+        "This describes the target as observed now; check again immediately before landing.",
+    ])
+    return OK if report["status"] == "VALID" else NOT_PASSED
+
+
 def main(argv: list[str] | None = None) -> int:
     for stream in (sys.stdout, sys.stderr):  # paths may be non-ASCII; never depend on the console code page
         stream.reconfigure(encoding="utf-8", errors="backslashreplace")
-    parser = argparse.ArgumentParser(prog="mrs", description="multi-repo-stack (read-only commands)")
+    parser = argparse.ArgumentParser(prog="mrs", description="multi-repo-stack (no command publishes anything)")
     commands = parser.add_subparsers(dest="command", required=True)
     pre = commands.add_parser("preflight", help="verify the consumer selection and selected shared/pstack checkouts")
     pre.add_argument("--consumer", default=".", help="consumer checkout root (default: current directory)")
@@ -214,5 +247,21 @@ def main(argv: list[str] | None = None) -> int:
     ass.add_argument("--reuse", help="owner-proposed reused agent observations, each to be decided by the verdict")
     ass.add_argument("--json", action="store_true")
     ass.set_defaults(handler=_assess)
+    task = commands.add_parser("task", help="create or check a task branch of a lifecycle repository's active line")
+    task_commands = task.add_subparsers(dest="task_command", required=True)
+    new = task_commands.add_parser("create", help="create <active version>/<task> in a local checkout at the "
+                                                  "target's current dev; nothing else changes")
+    new.add_argument("--repository", required=True, help="path or URL of the lifecycle repository (read-only)")
+    new.add_argument("--checkout", default=".", help="local working checkout to add the branch to (default: .)")
+    new.add_argument("--task", required=True, help="lowercase kebab-case task name, without the version prefix")
+    new.add_argument("--json", action="store_true")
+    chk = task_commands.add_parser("check", help="validate a task branch against the target's current state")
+    chk.add_argument("--repository", required=True, help="path or URL of the lifecycle repository (read-only)")
+    chk.add_argument("--checkout", default=".", help="local repository holding the task commit (default: .)")
+    chk.add_argument("--branch", required=True, help="the task branch name, <active version>/<task>")
+    chk.add_argument("--commit", help="the task commit (default: the branch in the checkout)")
+    chk.add_argument("--base", default="dev", help="dev, or the same-line parent task branch of a stacked task")
+    chk.add_argument("--json", action="store_true")
+    task.set_defaults(handler=_task)
     args = parser.parse_args(argv)
     return args.handler(args)

@@ -248,8 +248,9 @@ class SelectionTests(GitTestCase):
                 self.assertIn(str(record), report["reason"])
 
     def test_cli_is_read_only_and_reports_unknown_separately(self):
-        """Entry and scope / Observation: only read-only commands exist (a mutation verb is a usage error with
-        no effect on the target or the checkout); an unreadable target is UNKNOWN."""
+        """Entry and scope / Observation: no bootstrap, release or publication command exists (such a verb is a
+        usage error with no effect on the target or the checkout; only `task create` writes, and only to a local
+        checkout); an unreadable target is UNKNOWN."""
         checkout, _ = shared_snapshot()
         empty = self.bare("empty target.git")
         source, b = self.lifecycle_source(name="cli source")

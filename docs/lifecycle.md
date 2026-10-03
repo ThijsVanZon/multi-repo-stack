@@ -1,7 +1,17 @@
 # Lifecycle rules (`lifecycle` applicability only)
 
 - `dev` carries the active unreleased line. `main` is the latest contract release, and is absent before the first one.
-- Root `VERSION` holds `YY.RELEASE.PATCH`: a two-digit year, no `v` prefix and a single final newline. Task branches are `<VERSION>/<lowercase-kebab-task>` and target `dev`. Ordinary tasks never change `VERSION`. After the line advances, port old-line work explicitly to a correctly prefixed branch.
+- Root `VERSION` holds `YY.RELEASE.PATCH`: a two-digit year, no `v` prefix and a single final newline. Task branches are `<VERSION>/<task>`, with `<task>` in lowercase kebab-case starting with a letter, and target `dev`. Ordinary tasks never change `VERSION`. After the line advances, port old-line work explicitly to a correctly prefixed branch.
+- **Tasks.** pstack runs the PR workflow (opening a PR, babysitting, shipping); this tool adds only the lifecycle policy, and runs no forge command.
+  - `mrs task create --repository <target> --checkout <your checkout> --task <task>` creates `<active VERSION>/<task>` in your checkout, at the target's current `dev`. It never moves an existing branch, and changes nothing else in your checkout.
+  - `mrs task check --repository <target> --checkout <checkout> --branch <task branch> [--base <parent task branch>] [--commit <commit>]` validates a task against the target's current state: the active prefix, the name, the base, descent from the commit that opened the line, an unchanged `VERSION` and a lifecycle selector. A stacked task must contain its parent's current tip on the target.
+  - A VALID result describes one observation. It locks nothing and accepts nothing. Run the check again immediately before landing; a green CI run from before `dev` moved is not that check.
+  - **Port** old-line work after a release: `mrs task create --task <task>` makes the new-line branch, then `git cherry-pick -x <old base>..<old branch>` onto it records which commits were ported. Keep the old branch, check the new one and run the checks again. Never rename or retarget the old branch.
+- **pstack under this lifecycle** (deliberate, narrow adaptations of the pinned pstack):
+  - Trunk is `dev`, not `main`, because `main` moves only by release. Root PRs target `dev`; a stacked child targets its same-line parent task branch.
+  - Branch names carry the active line, so a task's line is visible and checkable.
+  - Shipping lands verified PRs on `dev` only. A release is a separate operation, never a PR into `main`. A task verdict that survives a rebase under Shipping's patch-id rule never carries release acceptance.
+  - Rewriting a task branch (rebase, amend) is pstack's business. `dev`, `main` and release tags are never rewritten.
 - **Bootstrap** creates only `refs/heads/dev`, at an exact prepared commit, on an empty target. It never adopts or overwrites a nonempty repository.
 - **Acceptance** of the integrated commit C needs two things:
   - a passing record for every check/environment pair that C's own `multi-repo-stack.json` requires, each collected on an isolated checkout of exactly C by a runner on that environment's native OS;

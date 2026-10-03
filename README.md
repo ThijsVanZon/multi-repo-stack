@@ -2,9 +2,9 @@
 
 A small shared substrate through which agents connect repositories to exact shared context, and through which lifecycle repositories bootstrap `dev`, accept exact integrated commits and promote releases with one guarded atomic Git transaction. Product truth stays in each product repository. Engineering and PR workflow come from canonical [pstack](https://github.com/cursor/plugins/tree/main/pstack), pinned by commit in `multi-repo-stack.json`.
 
-## Status: Slice 2, the exact-commit acceptance proof
+## Status: Slice 3, tasks, connection, upgrades and prepared CI
 
-This revision adds exact-commit acceptance to the Slice 1 local Git transaction proof. It is **not** release 26.1.0. It is not activated anywhere, and it has not been accepted.
+This revision adds task branches, the procedures for connecting and upgrading consumers, and a prepared read-only CI workflow. They build on exact-commit acceptance (Slice 2) and the local Git transaction proof (Slice 1). It is **not** release 26.1.0. It is not activated anywhere, and it has not been accepted.
 
 Implemented and exercised by tests against disposable local repositories:
 
@@ -31,6 +31,12 @@ Implemented and exercised by tests against disposable local repositories:
   - It also needs a separately supplied verdict, described below.
   - **INCOMPLETE** means something is missing. **REFUSED** means something is failed, mislabelled, mixed or unbound.
   - These are content and binding checks for trusted operators. The tool cannot authenticate who wrote a verdict, or whether its statements are true.
+- **Task branches** (`mrs task create`, `mrs task check`).
+  - `create` makes `<active VERSION>/<task>` in the caller's local checkout, at the target's current `dev`. It refuses an existing branch, here or on the target, and changes nothing else in the checkout.
+  - `check` validates a task against the target's current state: the active prefix, a lowercase kebab-case name, base `dev` or a same-line parent task that it contains, descent from the commit that opened the line, an unchanged `VERSION` and a lifecycle selector. A VALID result describes one observation; it locks and accepts nothing.
+  - Both refuse context-only, empty, unsupported and redirected targets. pstack owns PRs, stacks, review and landing; `docs/lifecycle.md` describes the explicit port after a line advances.
+- **Connection and upgrades** are documented procedures, not tools (`docs/connect.md`). An existing repository connects for context with a selector and an appended `AGENTS.md` route, and nothing else changes. An upgrade changes the one selector; old checkouts, old `--expect` records and old check records then refuse.
+- **Hosted CI** is prepared but has never run (`.github/workflows/checks.yml`). It has read-only permissions and runs on Linux, Windows and macOS with Python 3.11. Pull requests get task evidence for their head commit. Pushes to `dev` get an exact-commit record of the target's observed `dev`. See `docs/verification.md`.
 - **Transaction kernel** (`mrs/transactions.py`, library only):
   - **Bootstrap:** guarded dev-only bootstrap of an exact prepared commit.
   - **Release:** preparation of an exact release (receipt tag T on C, and D, the direct child that changes only `VERSION`), then one atomic `main`/tag/`dev` push with explicit leases, `--no-follow-tags` and `--recurse-submodules=no`.
@@ -40,16 +46,15 @@ Implemented and exercised by tests against disposable local repositories:
 
 Deliberate limits:
 
-- There is no mutation command. The kernel mutates only absolute local bare repositories carrying the `mrs-disposable-fixture` marker, which only test code creates. Before every observation and push, Git itself resolves where fetching from and pushing to the destination would go. Any rewrite, including an empty `insteadOf`/`pushInsteadOf` prefix in whichever configuration file holds it, or a remote named like the destination, is refused. Configuration that Git cannot read is UNKNOWN. The kernel's transports may use only Git's file protocol.
+- No command publishes anything or changes a target. `task create` adds one new branch, and the objects it needs, to the caller's local checkout; nothing else writes outside its own scratch. The kernel mutates only absolute local bare repositories carrying the `mrs-disposable-fixture` marker, which only test code creates. Before every observation and push, Git itself resolves where fetching from and pushing to the destination would go. Any rewrite, including an empty `insteadOf`/`pushInsteadOf` prefix in whichever configuration file holds it, or a remote named like the destination, is refused. Configuration that Git cannot read is UNKNOWN. The kernel's transports may use only Git's file protocol.
 - The kernel pushes from its own bare operation repository, so submodule recursion has no submodule repository to act on. `--recurse-submodules=no` is defense in depth there, not a separately demonstrable guard.
 - The low-level kernel's receipts carry an unjudged payload; the tests use SIMULATED acceptance there. Observers still recognize such receipts. Only the fixture kernel can create one.
 - The collector cannot run agent-integration or provider checks. They reach acceptance only through the non-author verdict, which accepts or rejects each reused observation.
 - This is trusted-repository execution, not a sandbox: checks run with the collector's permissions and environment, minus Git variables that would redirect them to another repository. Refusing escaping tracked links keeps ordinary build output inside the checkout; a command can still write anywhere its permissions allow. Evidence ownership is checked on POSIX only.
 - Not implemented yet:
-  - task-branch creation and validation;
-  - hosted CI;
-  - provider (GitHub) tests and application;
-  - consumer setup and upgrade tooling.
+  - hosted CI execution: the workflow has not run anywhere;
+  - provider (GitHub) tests and application, including bootstrap;
+  - production release application.
 - This revision was exercised by its author only on Windows 11 with Git 2.37.3.windows.1 and Python 3.11.0 and 3.12.1. Linux, macOS, agent-integration and provider gates remain open.
 
 ## Use
@@ -61,18 +66,20 @@ python -I -B <shared checkout>/mrs preflight --consumer <consumer checkout> --ps
 python -I -B <shared checkout>/mrs inspect --remote <path or URL> [--json]
 python -I -B <shared checkout>/mrs collect --repository <path or URL> --pstack <pstack checkout> --out <new record file> [--json]
 python -I -B <shared checkout>/mrs assess --repository <path or URL> --pstack <pstack checkout> --record <record file> [--record ...] [--attestation <verdict file>] [--reuse <proposals file>] [--json]
+python -I -B <shared checkout>/mrs task create --repository <path or URL> [--checkout <local checkout>] --task <task> [--json]
+python -I -B <shared checkout>/mrs task check --repository <path or URL> [--checkout <local checkout>] --branch <task branch> [--commit <commit>] [--base dev|<parent task branch>] [--json]
 ```
 
 Exit codes:
 
-- `0`: OK, every applicable check passed, or the assessment is SUFFICIENT.
-- `1`: a check did not pass, or the assessment is INCOMPLETE.
+- `0`: OK, every applicable check passed, the assessment is SUFFICIENT, the task branch was created, or the task is VALID.
+- `1`: a check did not pass, the assessment is INCOMPLETE, or the task is INVALID.
 - `2`: usage error.
 - `3`: refused.
 - `4`: unknown observation.
 - `5`: the selection changed during a run.
 
-Collection and assessment are read-only toward the repository; `collect` writes only its record and logs.
+Every command is read-only toward the repository it observes. `collect` writes only its record and logs; `task create` writes only its new branch into your checkout.
 
 **The verdict file** is JSON in the `multi-repo-stack/attestation/1` format. Its keys:
 
@@ -94,7 +101,8 @@ Tests and the recipe for this project's own records: see `docs/verification.md`.
 
 ## Layout
 
-- `AGENTS.md` is the agent entrypoint. `docs/` holds the routed instructions and the verification recipe.
+- `AGENTS.md` is the agent entrypoint. `docs/` holds the routed instructions, the verification recipe and the connection and upgrade procedures.
+- `.github/workflows/checks.yml` is the prepared read-only CI.
 - `multi-repo-stack.json` is the single selector: repository identity, applicability, the pinned canonical pstack, and this project's own check criteria.
 - `VERSION` holds the active line, `26.1.0`.
 - `mrs/` is the tool. `tests/` holds the disposable-fixture tests; `tests/consumers/` holds the tiny consumer shapes they build.

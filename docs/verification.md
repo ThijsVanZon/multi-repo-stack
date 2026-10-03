@@ -47,6 +47,17 @@ The record's evidence lists the tests run, failures, errors and skips. `assess` 
 
 Remove the scratch repository afterwards. Keep the record and its private logs.
 
+The scratch repository's `dev` is a local mapping of the commit under test, made only to drive `collect`. The record is evidence about that exact commit. It does not show that the commit was ever the real target's `dev`, and it carries no acceptance.
+
+## Hosted CI (prepared, not yet run)
+
+`.github/workflows/checks.yml` has read-only permissions. It never pushes, tags, comments, merges, changes settings or states a verdict. It pins its actions by commit and reads the pstack pin from `multi-repo-stack.json`. Each matrix row is one native OS (Linux, Windows, macOS) on Python 3.11, the declared minimum, and runs the full suite once.
+
+- **Pull requests** get task evidence. A `task` job runs `mrs task check` for the PR's head commit against the target's current state. Each row checks out the head commit, never GitHub's synthetic merge commit, and runs preflight and the suite. It keeps the runner facts, the preflight output and the suite summary. None of this is a record of an integrated C.
+- **Pushes to `dev`** get integrated evidence. Each row runs `mrs collect` against the target itself, from a checkout of the pushed commit. If `dev` has moved on by then, collection refuses, because this checkout is no longer the observed `dev`; the later push's run covers the new commit. A record names its candidate, so a later `dev` never relabels it.
+- **Retain the records.** Artifacts and logs expire. Download each row's `record.json` (for example `gh run download <run> --name <artifact>`) and keep it with the release evidence. Acceptance still needs passing records from all three OSes for the same commit, and the non-author verdict.
+- A green PR run describes the target when it ran. CI is not a lock, and it proves nothing about GitHub's atomic release behavior. Check the task again immediately before landing.
+
 ## Evidence
 
 - The unittest output.
@@ -68,7 +79,7 @@ Each test's docstring names the contract row it exercises. Every assertion reads
 
 ## First-release gates this project keeps open
 
-- **Runtime:** a passing `suite` record from native Windows, Linux and macOS for the same exact commit. Read-only GitHub Actions CI is the intended route.
+- **Runtime:** a passing `suite` record from native Windows, Linux and macOS for the same exact commit. The read-only workflow above is the intended route, once it is activated.
 - **Agent integration:** fresh `AGENTS.md` entry in each of these:
   - Claude Code on native Windows;
   - Claude Code on native macOS;

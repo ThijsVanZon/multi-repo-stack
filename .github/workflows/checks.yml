@@ -1,0 +1,115 @@
+# Read-only checks; docs/verification.md describes what each run proves. A pull request gets task evidence for
+# its head commit. A push to dev gets an exact-commit check record of the target's observed dev. Neither is
+# acceptance, and nothing here pushes, tags, comments, merges or changes settings.
+name: checks
+
+on:
+  pull_request:
+  push:
+    branches: [dev]
+
+permissions:
+  contents: read
+
+jobs:
+  task:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+      - name: Check the task branch against the target's current state
+        env:
+          TARGET: ${{ github.server_url }}/${{ github.repository }}.git
+          BRANCH: ${{ github.head_ref }}
+          BASE: ${{ github.base_ref }}
+          HEAD_COMMIT: ${{ github.event.pull_request.head.sha }}
+        run: python -I -B mrs task check --repository "$TARGET" --branch "$BRANCH" --commit "$HEAD_COMMIT" --base "$BASE"
+
+  suite:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ['3.11']
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Keep checkouts byte-exact
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          path: candidate
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Read the pstack pin from the selector
+        id: pstack
+        working-directory: candidate
+        run: |
+          python -I -B - >> "$GITHUB_OUTPUT" <<'PY'
+          import json
+          pin = json.load(open("multi-repo-stack.json", encoding="utf-8"))["pstack"]
+          print("repository=" + pin["repository"])
+          print("commit=" + pin["commit"])
+          PY
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ steps.pstack.outputs.repository }}
+          ref: ${{ steps.pstack.outputs.commit }}
+          path: pstack-source
+          persist-credentials: false
+      - name: Record the runner and what is checked
+        env:
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PR_BASE: ${{ github.base_ref }}
+          PR_BASE_COMMIT: ${{ github.event.pull_request.base.sha }}
+        run: |
+          mkdir evidence
+          {
+            echo "event $GITHUB_EVENT_NAME; workflow ref $GITHUB_REF; checked commit $(git -C candidate rev-parse HEAD)"
+            if [ -n "$PR_HEAD" ]; then
+              echo "pull request head $PR_HEAD onto $PR_BASE at $PR_BASE_COMMIT: task evidence, not integrated C"
+            fi
+            echo "image $ImageOS $ImageVersion; runner $RUNNER_OS $RUNNER_ARCH"
+            python --version
+            git --version
+            echo "core.autocrlf=$(git config --get core.autocrlf) core.symlinks=$(git -C candidate config --get core.symlinks)"
+          } | tee evidence/runner.txt
+      - name: Preflight
+        working-directory: candidate
+        run: python -I -B mrs preflight --pstack ../pstack-source --json | tee ../evidence/preflight.json
+      - name: Suite on the pull request's head commit (task evidence)
+        if: github.event_name == 'pull_request'
+        working-directory: candidate
+        env:
+          MRS_PSTACK_CHECKOUT: ${{ github.workspace }}/pstack-source
+          MRS_EVIDENCE_FILE: ${{ github.workspace }}/evidence/task-suite.txt
+        run: python -I -B tests
+      - name: Exact-commit record of the target's observed dev
+        if: github.event_name == 'push'
+        working-directory: candidate
+        env:
+          MRS_PSTACK_CHECKOUT: ${{ github.workspace }}/pstack-source
+          TARGET: ${{ github.server_url }}/${{ github.repository }}.git
+        run: |
+          python -I -B mrs collect --repository "$TARGET" --pstack ../pstack-source --out ../evidence/record.json
+          cat ../evidence/record.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: checks-${{ matrix.os }}-python-${{ matrix.python }}
+          path: evidence
+          if-no-files-found: error

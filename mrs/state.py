@@ -102,8 +102,9 @@ def snapshot(store: Path, remote: str) -> dict[str, str]:
     return refs
 
 
-def fetch(store: Path, remote: str, refs: dict[str, str]) -> None:
-    """Bring dev/main/tag objects into `store` and confirm they match the snapshot."""
+def fetch(store: Path, remote: str, refs: dict[str, str], extra: tuple[str, ...] = ()) -> None:
+    """Bring dev/main/tag objects, and those of any `extra` listed refs, into `store` and confirm they match
+    the snapshot."""
     try:
         stale = git.check(["-C", str(store), "for-each-ref", "--format=%(refname)", OBSERVED]).out.splitlines()
         if stale:
@@ -111,7 +112,7 @@ def fetch(store: Path, remote: str, refs: dict[str, str]) -> None:
                       input="".join(f"delete {ref}\n" for ref in stale).encode("utf-8"))
     except git.GitError as exc:
         raise Unknown(f"observation store unusable: {exc}") from None
-    wanted = [ref for ref in refs if ref in (DEV, MAIN) or ref.startswith("refs/tags/")]
+    wanted = [ref for ref in refs if ref in (DEV, MAIN) or ref.startswith("refs/tags/") or ref in extra]
     if not wanted:
         return
     result = git.run(["-C", str(store), "-c", "gc.auto=0", "-c", "maintenance.auto=false", "fetch", "--quiet",
