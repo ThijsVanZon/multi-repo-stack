@@ -8,8 +8,8 @@ This revision is a bounded first increment. It is **not** release 26.1.0. It is 
 
 Implemented and exercised by tests against disposable local repositories:
 
-- **Source and applicability preflight** (`mrs preflight`). It reads the consumer's committed selector and verifies the selected shared checkout and the pinned pstack checkout: exact HEAD, no modified, untracked or ignored content, and content re-hashed byte-for-byte against the commit. Replace refs are ignored and checkout filters are not trusted; clone with `--config core.autocrlf=false` if your Git converts line endings. It prints the verified identities and the instruction files that apply: `context` loads `docs/context.md`; `lifecycle` also loads `docs/lifecycle.md`. `--expect` invalidates a run whose selection changed.
-- **State observation** (`mrs inspect`). It separates absent refs from UNKNOWN; hidden-ref configuration, broken refs and missing history count as UNKNOWN. It recognizes contract release tags (annotated, directly targeting C, embedding a canonical receipt that binds exact object IDs) and applies the release-history predicates.
+- **Source and applicability preflight** (`mrs preflight`). It reads the consumer's committed selector and verifies the selected shared checkout and the pinned pstack checkout: exact HEAD, no modified, untracked or ignored content, and content re-hashed byte-for-byte against the commit. Replace refs are ignored and checkout filters are not trusted; clone with `--config core.autocrlf=false` if your Git converts line endings. It prints the verified identities and the instruction files that apply: `context` loads `docs/context.md`; `lifecycle` also loads `docs/lifecycle.md`. `--expect` invalidates a run whose selection changed. When the shared project checks itself, the executing checkout must be clean and committed too: editing is ordinary work, but a dirty checkout is refused, and a new commit invalidates an earlier `--expect` record until a fresh preflight records it.
+- **State observation** (`mrs inspect`). It separates absent refs from UNKNOWN; hidden-ref configuration, broken refs, missing history and Git configuration that cannot be read count as UNKNOWN. A target that Git's configuration would redirect elsewhere is refused rather than observed. It recognizes contract release tags (annotated, directly targeting C, embedding a canonical receipt that binds exact object IDs) and applies the release-history predicates.
 - **Transaction kernel** (`mrs/transactions.py`, library only):
   - **Bootstrap:** guarded dev-only bootstrap of an exact prepared commit.
   - **Release:** preparation of an exact release (receipt tag T on C, and D, the direct child that changes only `VERSION`), then one atomic `main`/tag/`dev` push with explicit leases, `--no-follow-tags` and `--recurse-submodules=no`.
@@ -17,7 +17,7 @@ Implemented and exercised by tests against disposable local repositories:
 
 Deliberate Slice 1 limits:
 
-- There is no mutation command. The kernel mutates only absolute local bare repositories carrying the `mrs-disposable-fixture` marker, which only test code creates. It refuses ambient `insteadOf`/`pushInsteadOf` rewrites and remotes named like the destination.
+- There is no mutation command. The kernel mutates only absolute local bare repositories carrying the `mrs-disposable-fixture` marker, which only test code creates. Before every observation and push, Git itself resolves where fetching from and pushing to the destination would go. Any rewrite, including an empty `insteadOf`/`pushInsteadOf` prefix in whichever configuration file holds it, or a remote named like the destination, is refused. Configuration that Git cannot read is UNKNOWN. The kernel's transports may use only Git's file protocol.
 - The kernel pushes from its own bare operation repository, so submodule recursion has no submodule repository to act on. `--recurse-submodules=no` is defense in depth there, not a separately demonstrable guard.
 - The acceptance payload in a receipt is recorded, not judged. The tests use SIMULATED acceptance.
 - Not implemented yet:
@@ -27,7 +27,7 @@ Deliberate Slice 1 limits:
   - hosted CI;
   - provider (GitHub) tests;
   - consumer setup and upgrade tooling.
-- Exercised only on Windows 11 with Git 2.37.3.windows.1 and Python 3.11.0 and 3.12.1. Linux, macOS and agent-integration gates remain open.
+- This revision was exercised by its author only on Windows 11 with Git 2.37.3.windows.1 and Python 3.11.0 and 3.12.1. Linux, macOS and agent-integration gates remain open.
 
 ## Use
 

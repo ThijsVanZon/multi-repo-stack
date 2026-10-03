@@ -32,7 +32,8 @@ class ForgedReceiptTests(GitTestCase):
             out("-C", clone, "fetch", "--quiet", self.tmp / "unrelated", unrelated)
             kwargs["header"] = (f"object {unrelated}\ntype commit\ntag 26.1.0\n"
                                 f"tagger F <f@example.invalid> 1790000000 +0000\nobject {c}\n")
-        next_commit = d[:12] if mutate == "abbreviated next commit" else d
+        next_commit = {"abbreviated next commit": d[:12], "overlong next commit": d + "0",
+                       "missing next commit": "1" * len(d)}.get(mutate, d)
         tag = forge_tag(clone, "26.1.0", c, next_commit, "26.2.0", **kwargs)
         out("-C", clone, "push", "--quiet", "--no-follow-tags", "--force", "origin",
             f"{c}:refs/heads/main", f"{tag}:refs/tags/26.1.0", f"{d}:refs/heads/dev")
@@ -54,6 +55,7 @@ class ForgedReceiptTests(GitTestCase):
             "receipt names another repository": "repository/applicability do not match",
             "duplicate object header": "header must be exactly one object, type, tag and tagger line",
             "abbreviated next commit": "must be a full object ID",
+            "overlong next commit": "must be a full object ID",
         }
         for mutate, message in cases.items():
             with self.subTest(mutate):
@@ -66,6 +68,17 @@ class ForgedReceiptTests(GitTestCase):
                 self.assertIn("malformed contract receipt", caught.exception.detail)
                 self.assertIn(message, caught.exception.detail)
                 self.assertEqual(refs(target), before)
+
+    def test_well_formed_but_missing_receipt_objects_are_unknown(self):
+        """Observation: a full ID in this repository's object format whose object is absent is missing
+        history (UNKNOWN), unlike a malformed ID; the same holds for an absent tag object."""
+        target, _ = self.forged_state("missing next commit")
+        before = refs(target)
+        with self.assertRaises(state.Unknown):
+            self.prepare(target)
+        self.assertEqual(refs(target), before)
+        with self.assertRaises(state.Unknown):
+            state.contract_release(target, "26.1.0", "1" * len(before[DEV]))
 
 
 class ReleaseHistoryPredicateTests(GitTestCase):

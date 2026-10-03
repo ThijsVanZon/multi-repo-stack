@@ -63,7 +63,7 @@ def verify_checkout(path: Path, commit: str, subtree: str | None = None, what: s
 
 
 def tool_identity() -> dict:
-    """The running tool's own checkout identity, recorded in operations and preflight output."""
+    """The running tool's own checkout identity, recorded in each operation record."""
     if not _is_checkout_root(TOOL_ROOT):
         return {"commit": None, "clean": False}
     head = git.run(["-C", str(TOOL_ROOT), "rev-parse", "--verify", "--quiet", "HEAD^{commit}"]).out or None
@@ -93,8 +93,10 @@ def preflight(consumer: Path, pstack: Path | None) -> dict:
     if selection.shared is None:
         if not os.path.samefile(consumer, TOOL_ROOT):
             raise SourceError("this selector belongs to the shared project itself; run the tool from that checkout")
-        tool = tool_identity()
-        shared = {"repository": selection.repository, "commit": head.out, "self": True, "clean": tool["clean"]}
+        # Editing this checkout is ordinary work, but a verified run executes only clean committed source;
+        # its commit is recorded in the output (externally), never pinned inside the source itself.
+        verify_checkout(TOOL_ROOT, head.out, what="shared checkout (this checkout, running tool)")
+        shared = {"repository": selection.repository, "commit": head.out, "self": True, "clean": True}
         shared_selection = selection
     else:
         verify_checkout(TOOL_ROOT, selection.shared.commit, what="shared checkout (running tool)")

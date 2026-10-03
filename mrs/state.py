@@ -17,6 +17,7 @@ RECEIPT_KEYS = {"format", "repository", "version", "candidate", "next", "accepta
 MAX_RECEIPT_BYTES = 1 << 20
 OPENED_LINE = "Next-line opening date (UTC): "
 OBSERVED = "refs/mrs/observed/"
+PROBE_REMOTE = "mrs-destination"
 DEV, MAIN = "refs/heads/dev", "refs/heads/main"
 
 _OID = re.compile(r"[0-9a-f]{40,}")
@@ -24,6 +25,10 @@ _OID = re.compile(r"[0-9a-f]{40,}")
 
 class Unknown(Exception):
     """Observation failed or required history is missing. Never equivalent to absence."""
+
+
+class Redirected(Exception):
+    """Git would observe or publish the requested destination somewhere else."""
 
 
 class NotContract(Exception):
@@ -39,13 +44,43 @@ def encode_receipt(receipt: dict) -> bytes:
                       allow_nan=False).encode("ascii")
 
 
+def check_destination(store: Path, remote: str) -> None:
+    """Prove that Git fetches from and pushes to `remote` itself, before anything observes or publishes it.
+
+    Git resolves the effective URLs from `store` with the configuration and environment its transports
+    use there, so every configuration source, longest-match and empty url.<base>.(push)insteadOf prefixes
+    are Git's own semantics rather than a re-implementation. A remote whose name is the destination
+    replaces it on Windows. Configuration that Git cannot read is UNKNOWN, never "no redirection".
+    """
+    recorded = git.run(["config", "--file", str(Path(store) / "config"), "--replace-all",
+                        f"remote.{PROBE_REMOTE}.url", remote])
+    if not recorded.ok:
+        raise Unknown(f"cannot record the destination in {store}: {recorded.err}")
+    for direction, flags in (("fetch", []), ("push", ["--push"])):
+        resolved = git.run(["-C", str(store), "remote", "get-url", *flags, "--all", PROBE_REMOTE])
+        if not resolved.ok:
+            raise Unknown(f"Git configuration could not be resolved for {remote}: {resolved.err}")
+        urls = resolved.stdout.decode("utf-8", "replace").splitlines()
+        if urls != [remote]:
+            raise Redirected(f"Git configuration resolves the {direction} location of {remote} to {urls}")
+    named = git.run(["-C", str(store), "config", "-z", "--name-only", "--get-regexp", r"^remote\."])
+    if named.returncode not in (0, 1):  # 1: no remote is configured at all
+        raise Unknown(f"Git configuration could not be read: {named.err}")
+    for key in named.stdout.decode("utf-8", "replace").split("\0"):
+        if key[len("remote."):].rpartition(".")[0] == remote:
+            raise Redirected(f"configured remote {key} is named like the destination and would replace it")
+
+
 def snapshot(store: Path, remote: str) -> dict[str, str]:
     """Complete ref listing of `remote` from one advertisement."""
+    check_destination(store, remote)
     if Path(remote).is_dir():
         hidden = git.run(["-C", remote, "config", "--get-regexp", r"^(transfer|uploadpack|receive)\.hiderefs$"])
-        if hidden.ok and hidden.out:
+        if hidden.returncode not in (0, 1):  # 1: none configured
+            raise Unknown(f"configuration of {remote} could not be read: {hidden.err}")
+        if hidden.ok:
             raise Unknown(f"hidden refs are configured for {remote}; absence cannot be observed")
-    result = git.run(["-C", str(store), "ls-remote", "--", remote])
+    result = git.run(["-C", str(store), "ls-remote", "--", remote], env=git.local_only(remote))
     if not result.ok:
         raise Unknown(f"ls-remote failed (exit {result.returncode}): {result.err}")
     try:
@@ -81,7 +116,7 @@ def fetch(store: Path, remote: str, refs: dict[str, str]) -> None:
         return
     result = git.run(["-C", str(store), "-c", "gc.auto=0", "-c", "maintenance.auto=false", "fetch", "--quiet",
                       "--no-tags", "--no-write-fetch-head", "--recurse-submodules=no", "--", remote,
-                      *[f"+{ref}:{OBSERVED}{ref[5:]}" for ref in wanted]])
+                      *[f"+{ref}:{OBSERVED}{ref[5:]}" for ref in wanted]], env=git.local_only(remote))
     if not result.ok:
         raise Unknown(f"fetch failed (exit {result.returncode}): {result.err}")
     for ref in wanted:
@@ -97,10 +132,12 @@ def ancestor(store: Path, older: str, newer: str) -> bool:
         raise Unknown(f"missing history: {exc}") from None
 
 
-def _exact_commit(store: Path, value, what: str) -> str:
-    """A full commit ID naming itself; names, abbreviations and other object types are malformed."""
-    if not isinstance(value, str) or not _OID.fullmatch(value):
-        raise Malformed(f"{what} must be a full object ID, got {value!r}")
+def _exact_commit(store: Path, value, what: str, width: int) -> str:
+    """A full commit ID naming itself; names, abbreviations, IDs of another object format (`width` is
+    the length of IDs in this repository) and other object types are malformed. A well-formed ID whose
+    object is missing is UNKNOWN."""
+    if not isinstance(value, str) or len(value) != width or not _OID.fullmatch(value):
+        raise Malformed(f"{what} must be a full object ID of this repository ({width} hex digits), got {value!r}")
     found = git.object_type(store, value)
     if found is None:
         raise Unknown(f"missing history: {what} {value} is not available")
@@ -169,9 +206,15 @@ def _keys(value, keys: set[str], what: str) -> dict:
 
 def contract_release(store: Path, name: str, oid: str) -> Release:
     """Validate a canonical version-named tag as a contract release tag."""
-    if git.object_type(store, oid) != "tag":
+    kind = git.object_type(store, oid)
+    if kind is None:
+        raise Unknown(f"missing history: tag {name} object {oid} is not available")
+    if kind != "tag":
         raise NotContract(f"tag {name} is not an annotated tag")
-    raw = git.check(["-C", str(store), "cat-file", "tag", oid]).stdout
+    read = git.run(["-C", str(store), "cat-file", "tag", oid])
+    if not read.ok:
+        raise Unknown(f"tag {name} object {oid} cannot be read: {read.err}")
+    raw = read.stdout
     head, _, message = raw.partition(b"\n\n")
     if not message.startswith(MARKER + b"\n"):
         raise NotContract(f"annotated tag {name} carries no multi-repo-stack receipt")
@@ -192,7 +235,7 @@ def contract_release(store: Path, name: str, oid: str) -> Release:
         raise Malformed(f"tag {name}: tag name, tag header and receipt version disagree")
     try:
         version = versions.parse(name)
-        candidate = _exact_commit(store, receipt["candidate"], f"tag {name}: candidate")
+        candidate = _exact_commit(store, receipt["candidate"], f"tag {name}: candidate", len(oid))
         peeled = git.run(["-C", str(store), "rev-parse", "--verify", "--quiet", f"{oid}^{{commit}}"]).out
         if headers["object"] != candidate or headers["type"] != "commit" or peeled != candidate:
             raise Malformed(f"tag {name}: must directly target the receipt's candidate commit")
@@ -207,7 +250,7 @@ def contract_release(store: Path, name: str, oid: str) -> Release:
         next_version = versions.parse(nxt["version"])
         if opened.isoformat() != nxt["opened"] or next_version != versions.next_line(version, opened):
             raise Malformed(f"tag {name}: next line {next_version} does not follow from {name} opened {opened}")
-        next_commit = _exact_commit(store, nxt["commit"], f"tag {name}: next-line commit")
+        next_commit = _exact_commit(store, nxt["commit"], f"tag {name}: next-line commit", len(oid))
         problem = next_line_violation(store, candidate, next_commit, next_version, opened)
         if problem:
             raise Malformed(f"tag {name}: {problem}")

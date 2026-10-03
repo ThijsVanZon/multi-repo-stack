@@ -28,13 +28,23 @@ def _print(report: dict, as_json: bool, lines: list[str]) -> None:
 
 
 def _selection(report: dict) -> dict:
-    """Identities a run depends on. The consumer's own HEAD (and the shared project's own, when it
-    checks itself) moves during ordinary work and is reported, not compared."""
-    consumer, shared = report.get("consumer", {}), dict(report.get("shared") or {})
-    if shared.get("self"):
-        shared = {"repository": shared.get("repository"), "self": True}
+    """Identities a run depends on. A consumer's own HEAD moves during ordinary task work and is
+    reported, not compared. The executing shared source is compared exactly, including the shared
+    project's own checkout when it checks itself."""
+    consumer = report.get("consumer", {})
     return {"repository": consumer.get("repository"), "applicability": consumer.get("applicability"),
-            "shared": shared, "pstack": report.get("pstack"), "load": report.get("load")}
+            "shared": report.get("shared"), "pstack": report.get("pstack"), "load": report.get("load")}
+
+
+def _record(path: str) -> dict:
+    try:
+        record = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"the earlier preflight record {path} cannot be read: {exc}") from None
+    if (not isinstance(record, dict) or record.get("verdict") != "OK"
+            or not all(isinstance(record.get(key), dict) for key in ("consumer", "shared", "pstack"))):
+        raise ValueError(f"{path} is not the --json output of a successful preflight")
+    return record
 
 
 def _preflight(args) -> int:
@@ -48,11 +58,14 @@ def _preflight(args) -> int:
         return INVALIDATED if args.expect else REFUSED
     report["verdict"] = "OK"
     if args.expect:
-        old = _selection(json.loads(Path(args.expect).read_text(encoding="utf-8")))
-        new = _selection(report)
-        changed = [key for key in old if old[key] != new[key]]
-        if changed:
-            report = {"verdict": "INVALIDATED", "reason": f"selection changed during the run: {', '.join(changed)}"}
+        try:
+            old, new = _selection(_record(args.expect)), _selection(report)
+            changed = [key for key in old if old[key] != new[key]]
+            reason = f"selection changed during the run: {', '.join(changed)}" if changed else None
+        except ValueError as exc:
+            reason = str(exc)
+        if reason:
+            report = {"verdict": "INVALIDATED", "reason": reason}
             _print(report, args.json, [f"PREFLIGHT INVALIDATED: {report['reason']}"])
             return INVALIDATED
     consumer, shared, pstack = report["consumer"], report["shared"], report["pstack"]
@@ -71,9 +84,12 @@ def _inspect(args) -> int:
     scratch = tempfile.mkdtemp(prefix="mrs-inspect-")
     try:
         store = Path(scratch) / "observed.git"
-        git.check(["init", "--quiet", "--bare", "--template=", str(store)])
         try:
+            git.check(["init", "--quiet", "--bare", "--template=", str(store)])
             observed = state.observe(store, args.remote)
+        except state.Redirected as exc:
+            _print({"kind": "REFUSED", "reason": str(exc)}, args.json, [f"state     REFUSED: {exc}"])
+            return REFUSED
         except (state.Unknown, git.GitError) as exc:
             _print({"kind": "UNKNOWN", "reason": str(exc)}, args.json, [f"state     UNKNOWN: {exc}"])
             return UNKNOWN

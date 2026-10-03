@@ -34,9 +34,14 @@ NOW = datetime(2026, 10, 3, 12, 0, tzinfo=timezone.utc)
 RELEASER = Identity("Fixture Releaser", "fixture-releaser@example.invalid")
 
 # Hostile ambient settings for every test: anything not suppressed would publish extra refs or repositories.
+# Every Git process a test starts (helpers, the kernel, CLI and hook children) may use only the file
+# transport, set by this test-owned configuration and by the environment setUp itself installs, so an
+# adversarial redirection can never reach the network.
 AMBIENT_GLOBAL_CONFIG = """[push]
 \tfollowTags = true
 \trecurseSubmodules = on-demand
+[protocol]
+\tallow = never
 [protocol "file"]
 \tallow = always
 [init]
@@ -184,7 +189,7 @@ class GitTestCase(unittest.TestCase):
         config = self.tmp / "ambient global.gitconfig"
         config.write_text(AMBIENT_GLOBAL_CONFIG, encoding="utf-8")
         env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
-        env.update(GIT_CONFIG_GLOBAL=str(config), GIT_TERMINAL_PROMPT="0",
+        env.update(GIT_CONFIG_GLOBAL=str(config), GIT_ALLOW_PROTOCOL="file", GIT_TERMINAL_PROMPT="0",
                    GIT_AUTHOR_NAME="Fixture Author", GIT_AUTHOR_EMAIL="fixture-author@example.invalid",
                    GIT_COMMITTER_NAME="Fixture Author", GIT_COMMITTER_EMAIL="fixture-author@example.invalid")
         patcher = mock.patch.dict(os.environ, env, clear=True)

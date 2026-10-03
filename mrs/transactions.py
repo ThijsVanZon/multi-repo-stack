@@ -1,7 +1,8 @@
 """Guarded dev-only bootstrap and atomic main/tag/dev release, with read-only reconciliation.
 
 Slice 1 boundary: these functions mutate only disposable fixture destinations (an absolute
-path to a local bare repository containing FIXTURE_MARKER). There is no command-line entry
+path to a local bare repository containing FIXTURE_MARKER, which Git's configuration resolves to
+itself), and their transports may use only Git's file protocol. There is no command-line entry
 for them and no acceptance gate yet; the acceptance payload is recorded, not judged.
 """
 
@@ -67,15 +68,13 @@ def _destination(remote: str | Path) -> str:
     return str(path)
 
 
-def _check_rewrites(store: Path, destination: str) -> None:
-    """Refuse ambient configuration that would send observation or the push somewhere else."""
-    forms = {destination, Path(destination).as_posix()}
-    rules = git.run(["-C", str(store), "config", "-z", "--get-regexp", r"^(url\..*\.(push)?insteadof|remote\..*)$"])
-    for record in rules.stdout.decode("utf-8", "replace").split("\0") if rules.ok else []:
-        key, _, value = record.partition("\n")
-        rewrites = key.startswith("url.") and value and any(form.startswith(value) for form in forms)
-        if rewrites or any(key.startswith(f"remote.{form}.") for form in forms):
-            raise Refused("destination", f"ambient {key} would change where the destination resolves")
+def _resolves_to_itself(store: Path, destination: str) -> None:
+    """The single effective destination, checked before every observation and push of an operation
+    (inspection applies the same check through state.snapshot). Unreadable configuration is Unknown."""
+    try:
+        state.check_destination(store, destination)
+    except state.Redirected as exc:
+        raise Refused("destination", str(exc)) from None
 
 
 def _new_store(work: Path) -> Path:
@@ -99,10 +98,22 @@ def _write(work: Path, operation: dict) -> None:
         handle.write(json.dumps(operation, indent=2, sort_keys=True).encode("utf-8") + b"\n")
 
 
+_RECORD_KEYS = {
+    "bootstrap": {"format", "kind", "repository", "remote", "version", "expected", "updates", "tool"},
+    "release": {"format", "kind", "repository", "remote", "version", "candidate", "tag", "next", "expected",
+                "updates", "receipt_sha256", "prepared_at", "tool"},
+}
+
+
 def load(work: Path) -> dict:
-    operation = json.loads((Path(work) / OPERATION_FILE).read_bytes())
-    if operation.get("format") != OPERATION_FORMAT:
-        raise Refused("operation", f"{work} does not hold a {OPERATION_FORMAT} record")
+    path = Path(work) / OPERATION_FILE
+    try:
+        operation = json.loads(path.read_bytes())
+    except (OSError, ValueError) as exc:
+        raise Refused("operation", f"cannot read the operation record {path}: {exc}") from None
+    kind = operation.get("kind") if isinstance(operation, dict) else None
+    if not isinstance(kind, str) or operation.get("format") != OPERATION_FORMAT or set(operation) != _RECORD_KEYS.get(kind):
+        raise Refused("operation", f"{path} is not a complete {OPERATION_FORMAT} record")
     return operation
 
 
@@ -121,9 +132,10 @@ def prepare_bootstrap(*, source: Path, commit: str, remote: str | Path, work: Pa
     """Prepare creation of dev at exact `commit` (B) from a local source repository."""
     destination = _destination(remote)
     store = _new_store(Path(work))
-    _check_rewrites(store, destination)
+    _resolves_to_itself(store, destination)
     fetched = git.run(["-C", str(store), "-c", "gc.auto=0", "fetch", "--quiet", "--no-tags", "--no-write-fetch-head",
-                       "--recurse-submodules=no", "--", str(source), f"{commit}:refs/mrs/op/bootstrap"])
+                       "--recurse-submodules=no", "--", str(source), f"{commit}:refs/mrs/op/bootstrap"],
+                      env=git.local_only(source))
     got = git.run(["-C", str(store), "rev-parse", "--verify", "--quiet", "refs/mrs/op/bootstrap^{commit}"])
     if not fetched.ok or got.out != commit:
         raise Refused("source", f"exact commit {commit} is not available from {source}")
@@ -176,7 +188,7 @@ def prepare_release(*, remote: str | Path, work: Path, candidate: str, acceptanc
         raise Refused("acceptance", "acceptance must contain exactly criteria, results and verdict")
     destination = _destination(remote)
     store = _new_store(Path(work))
-    _check_rewrites(store, destination)
+    _resolves_to_itself(store, destination)
     observed = state.observe(store, destination)
     if observed.applicability not in (None, "lifecycle"):
         raise Refused("applicability", f"{observed.repository} selects {observed.applicability!r}; "
@@ -230,6 +242,8 @@ def _classify(store: Path, destination: str, operation: dict) -> Outcome:
         return _classify_release(store, operation, refs)
     except (state.Unknown, git.GitError) as exc:
         return Outcome("UNKNOWN", "observation", str(exc))
+    except state.Redirected as exc:  # configuration changed after the operation's own destination check
+        return Outcome("UNKNOWN", "destination", str(exc))
 
 
 def _classify_bootstrap(store: Path, operation: dict, refs: dict[str, str]) -> Outcome:
@@ -290,8 +304,10 @@ def _same_path(reported: str, destination: str) -> bool:
         return False
 
 
-def _push_result(result: git.Result, refs: set[str], destination: str) -> str:
+def _push_result(result: git.Result, operation: dict, destination: str) -> str:
     """Classify a porcelain push. The caller always re-observes; this only names the reported cause."""
+    refs = set(operation["updates"])
+    expected_absent = {ref for ref, old in operation["expected"].items() if old is None}
     statuses, reported = {}, None
     for line in result.stdout.decode("utf-8", "replace").splitlines():
         parts = line.split("\t")
@@ -308,6 +324,10 @@ def _push_result(result: git.Result, refs: set[str], destination: str) -> str:
         return "stale"
     if "hook declined" in summaries:
         return "policy"
+    # The server found an expected-absent ref already created (Git 2.52 names this in the porcelain summary).
+    if any(ref in expected_absent and summary == "[remote rejected] (reference already exists)"
+           for ref, (_, summary) in statuses.items()):
+        return "stale"
     server_update_failed = any(text in summaries for text in ("transaction failed", "failed to update ref"))
     if server_update_failed and (b"but expected" in result.stderr or b"reference already exists" in result.stderr):
         return "stale"
@@ -323,7 +343,7 @@ def push(work: Path) -> str:
     work = Path(work)
     operation, store = load(work), work / STORE
     destination = _destination(operation["remote"])
-    _check_rewrites(store, destination)
+    _resolves_to_itself(store, destination)
     with open(work / ATTEMPTS_FILE, "a", encoding="utf-8") as log:
         log.write(f"{datetime.now(timezone.utc).isoformat()} push attempted\n")
     args = ["-C", str(store), "push", "--porcelain", "--no-follow-tags", "--recurse-submodules=no",
@@ -332,25 +352,33 @@ def push(work: Path) -> str:
         args.append("--atomic")
     args += [f"--force-with-lease={ref}:{old or ''}" for ref, old in operation["expected"].items()]
     args += ["--", destination, *[f"{new}:{ref}" for ref, new in operation["updates"].items()]]
-    return _push_result(git.run(args), set(operation["updates"]), destination)
+    return _push_result(git.run(args, env=git.local_only(destination)), operation, destination)
 
 
 def reconcile(work: Path) -> Outcome:
     """Read-only comparison of the prepared operation with the target's current state."""
     work = Path(work)
-    operation = load(work)
-    return _classify(work / STORE, _destination(operation["remote"]), operation)
+    operation, store = load(work), work / STORE
+    destination = _destination(operation["remote"])
+    try:
+        _resolves_to_itself(store, destination)
+    except state.Unknown as exc:
+        return Outcome("UNKNOWN", "destination", str(exc))
+    return _classify(store, destination, operation)
 
 
 def apply(work: Path, *, now: datetime | None = None) -> Outcome:
     work = Path(work)
     now = _utc(now)
-    operation, store = load(work), work / STORE
+    store = work / STORE
     try:
+        operation = load(work)
         destination = _destination(operation["remote"])
-        _check_rewrites(store, destination)
+        _resolves_to_itself(store, destination)
     except Refused as exc:
         return Outcome("REFUSED", exc.code, exc.detail)
+    except state.Unknown as exc:
+        return Outcome("UNKNOWN", "destination", str(exc))
     damage = _damaged(store, operation)
     if damage:
         return Outcome("REFUSED", "operation", damage)
@@ -369,6 +397,8 @@ def apply(work: Path, *, now: datetime | None = None) -> Outcome:
         pushed = push(work)
     except Refused as exc:
         return Outcome("REFUSED", exc.code, exc.detail, before.refs)
+    except state.Unknown as exc:
+        return Outcome("UNKNOWN", "destination", str(exc), before.refs)
     if pushed == "destination-mismatch":
         return Outcome("UNKNOWN", pushed, "Git reported a push location other than the destination; inspect both",
                        before.refs)

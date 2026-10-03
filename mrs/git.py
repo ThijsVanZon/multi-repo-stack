@@ -9,12 +9,13 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-# Variables that would silently redirect commands to another repository or index, or inject the
-# command-line configuration of a parent Git process (e.g. when run from a hook).
+# Variables that would silently redirect commands to another repository or index, inject the
+# command-line configuration of a parent Git process (e.g. when run from a hook), make `git config`
+# read other configuration than every other command (GIT_CONFIG), or rewrite ancestry (grafts).
 _SCRUBBED_ENV = (
     "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
     "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR", "GIT_NAMESPACE",
-    "GIT_QUARANTINE_PATH", "GIT_PREFIX", "GIT_CONFIG_PARAMETERS",
+    "GIT_QUARANTINE_PATH", "GIT_PREFIX", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG", "GIT_GRAFT_FILE",
 )
 
 
@@ -61,6 +62,12 @@ def run(args: list[str], *, cwd: Path | str | None = None, input: bytes | None =
         full_env.update(env)
     proc = subprocess.run([executable(), *args], cwd=cwd, input=input, capture_output=True, env=full_env)
     return Result(proc.returncode, proc.stdout, proc.stderr)
+
+
+def local_only(location: str | Path) -> dict[str, str] | None:
+    """Environment for a transport to a local repository path: Git itself, and every Git process it
+    starts, then refuses any transport but file, so a rewritten location fails before any connection."""
+    return {"GIT_ALLOW_PROTOCOL": "file"} if Path(location).is_absolute() else None
 
 
 def check(args: list[str], **kwargs) -> Result:

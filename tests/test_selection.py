@@ -70,6 +70,42 @@ class SelectionTests(GitTestCase):
         self.assertIn(f"shared    {SHARED_REPOSITORY}  commit={shared_commit}  (this checkout)", text)
         self.assertIn(f"pstack    cursor/plugins  commit={PIN}  pstack tree={PSTACK_TREE}", text)
 
+    def test_shared_project_self_check_needs_clean_committed_source(self):
+        """Caller/source preservation: the shared project checking itself verifies only clean committed source.
+        Editing stays possible, but dirty source is refused; once committed, the earlier record is invalidated
+        and a fresh preflight records the new executing commit."""
+        checkout = self.tmp / "shared self checkout"
+        out("clone", "--quiet", "--config", "core.autocrlf=false", snapshot_source(), checkout)
+        first = out("-C", checkout, "rev-parse", "HEAD")
+        args = ("preflight", "--consumer", checkout, "--pstack", self.pstack(), "--json")
+        code, text = run_tool(checkout, *args)
+        self.assertEqual(code, 0, text)
+        self.assertEqual(json.loads(text)["shared"], {"repository": SHARED_REPOSITORY, "commit": first,
+                                                      "self": True, "clean": True})
+        record = self.tmp / "entry selection.json"
+        record.write_text(text, encoding="utf-8")
+
+        edits = {"modified tracked file": ("README.md", "# Edited during ordinary work\n"),
+                 "untracked shadowing module": ("mrs/shadow.py", "SHADOW = True\n")}
+        for label, (name, content) in edits.items():
+            with self.subTest(label):
+                (checkout / name).write_text(content, encoding="utf-8")
+                code, text = run_tool(checkout, *args)
+                self.assertEqual((code, json.loads(text)["verdict"]), (3, "REFUSED"))
+                self.assertIn("shared checkout (this checkout, running tool)", json.loads(text)["reason"])
+                code, text = run_tool(checkout, *args, "--expect", record)
+                self.assertEqual((code, json.loads(text)["verdict"]), (5, "INVALIDATED"))
+
+        out("-C", checkout, "add", "-A")
+        out("-C", checkout, "commit", "--quiet", "-m", "Ordinary shared-project work")
+        second = out("-C", checkout, "rev-parse", "HEAD")
+        code, text = run_tool(checkout, *args, "--expect", record)
+        self.assertEqual((code, json.loads(text)["verdict"]), (5, "INVALIDATED"))
+        self.assertIn("shared", json.loads(text)["reason"])
+        code, text = run_tool(checkout, *args)
+        self.assertEqual((code, json.loads(text)["shared"]["commit"]), (0, second))
+        self.assertNotEqual(first, second)
+
     def test_context_only_existing_consumer_keeps_its_rules_and_refuses_lifecycle_mutation(self):
         """Entry and scope: an existing-content repository connected as context keeps its files and rules,
         loads no lifecycle rules, and every lifecycle mutation refuses."""
@@ -204,12 +240,25 @@ class SelectionTests(GitTestCase):
         self.assertEqual((code, report["verdict"]), (5, "INVALIDATED"))
         self.assertIn("applicability", report["reason"])
 
+        for label, content in (("not JSON", "PREFLIGHT OK\n"), ("not a successful preflight", '{"verdict": "REFUSED"}')):
+            with self.subTest(label):
+                record.write_text(content, encoding="utf-8")
+                code, report = self.preflight(consumer, pstack, None, "--expect", record)
+                self.assertEqual((code, report["verdict"]), (5, "INVALIDATED"))
+                self.assertIn(str(record), report["reason"])
+
     def test_cli_is_read_only_and_reports_unknown_separately(self):
-        """Entry and scope / Observation: only read-only commands exist; an unreadable target is UNKNOWN."""
+        """Entry and scope / Observation: only read-only commands exist (a mutation verb is a usage error with
+        no effect on the target or the checkout); an unreadable target is UNKNOWN."""
         checkout, _ = shared_snapshot()
-        code, text = run_tool(checkout, "bootstrap")
-        self.assertEqual(code, 2)
-        self.assertIn("invalid choice: 'bootstrap' (choose from 'preflight', 'inspect')", text)
+        empty = self.bare("empty target.git")
+        source, b = self.lifecycle_source(name="cli source")
+        for verb in ("bootstrap", "release", "apply", "push"):
+            with self.subTest(verb):
+                code, text = run_tool(checkout, verb, "--remote", empty, "--source", source, "--commit", b)
+                self.assertEqual(code, 2, text)
+        self.assertEqual(refs(empty), {})
+        self.assertEqual(out("-C", checkout, "status", "--porcelain", "--untracked-files=all", "--ignored"), "")
         code, text = run_tool(checkout, "inspect", "--remote", self.tmp / "no such target", "--json")
         self.assertEqual((code, json.loads(text)["kind"]), (4, "UNKNOWN"))
         target, _, _ = self.bootstrapped()

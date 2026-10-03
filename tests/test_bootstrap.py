@@ -1,8 +1,39 @@
+import json
+import os
 import shutil
+import sys
+from pathlib import Path
+from unittest import mock
 
 from mrs import state, transactions
 from mrs.transactions import Refused
 from tests.support import DEV, GitTestCase, git, out, refs
+
+# A proc-receive hook speaking Git's pkt-line protocol: it records the commands it was sent, optionally
+# lets a competitor create dev first, and reports `ng <ref> <reason>` for every command.
+PROC_RECEIVE = r'''import os, subprocess, sys
+stdin, stdout = sys.stdin.buffer, sys.stdout.buffer
+def read():
+    lines = []
+    while True:
+        size = int(stdin.read(4), 16)
+        if size == 0:
+            return lines
+        lines.append(stdin.read(size - 4))
+def write(*lines):
+    stdout.write(b"".join(b"%04x" % (len(line) + 4) + line for line in lines) + b"0000")
+    stdout.flush()
+read()
+write(b"version=1\0")
+commands = [command.split() for command in read()]
+with open("fixture-commands", "wb") as record:
+    record.write(b"\n".join(b" ".join(command) for command in commands) + b"\n")
+if sys.argv[2]:
+    quarantine = ("GIT_QUARANTINE_PATH", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES")
+    env = {key: value for key, value in os.environ.items() if key not in quarantine}
+    subprocess.run(["git", "update-ref", "refs/heads/dev", sys.argv[2], ""], env=env, check=True)
+write(*[b"ng " + command[2] + b" " + sys.argv[1].encode("ascii") for command in commands])
+'''
 
 
 class BootstrapTests(GitTestCase):
@@ -111,6 +142,58 @@ exit 0
         sent = (target / "fixture-commands").read_text(encoding="utf-8").split()
         self.assertEqual(sent, ["0" * len(b), b, "refs/heads/dev"], "client sent create-only expectation")
 
+    def test_server_reported_create_conflict_is_stale_and_other_rejections_are_not(self):
+        """Local bootstrap / portability: Git 2.52 reports a create-only lease that loses the server-side race
+        as '[remote rejected] (reference already exists)'. A proc-receive hook reproduces that report while a
+        real competitor takes dev: stale, competitor kept. Another server reason of the same shape stays
+        'rejected'. Local Git evidence, not GitHub policy proof."""
+        source, b = self.lifecycle_source()
+        rival = self.checkout("rival")
+        competitor = self.commit(rival, {"rival.txt": "first\n"}, "Competing initializer")
+        cases = (("reference already exists", competitor, ("REFUSED", "stale"), {DEV: competitor}),
+                 ("fixture policy refuses dev", "", ("REFUSED", "rejected"), {}))
+        for reason, rival_dev, expected, final in cases:
+            with self.subTest(reason):
+                target = self.bare(f"target {reason}.git")
+                out("-C", rival, "push", "--quiet", target, f"{competitor}:refs/fixture/competitor")
+                out("-C", target, "update-ref", "-d", "refs/fixture/competitor")
+                out("-C", target, "config", "receive.procReceiveRefs", DEV)
+                (target / "fixture-proc-receive.py").write_text(PROC_RECEIVE, encoding="utf-8")
+                self.hook(target, "proc-receive", f'exec "{Path(sys.executable).as_posix()}" -I -B '
+                                                  f'fixture-proc-receive.py "{reason}" "{rival_dev}"\n')
+                work = self.tmp / f"op {reason}"
+                transactions.prepare_bootstrap(source=source, commit=b, remote=target, work=work)
+
+                outcome = transactions.apply(work)
+
+                self.assertEqual((outcome.status, outcome.reason), expected, outcome)
+                self.assertEqual(refs(target), final)
+                sent = (target / "fixture-commands").read_text(encoding="utf-8").split()
+                self.assertEqual(sent, ["0" * len(b), b, DEV], "client sent create-only expectation")
+
+    def test_corrupt_operation_record_fails_clearly(self):
+        """Retry and uncertainty: an unreadable or incomplete operation record is refused with a clear reason
+        by apply, push and reconcile; nothing is pushed."""
+        target = self.bare("target.git")
+        source, b = self.lifecycle_source()
+        work = self.tmp / "bootstrap op"
+        transactions.prepare_bootstrap(source=source, commit=b, remote=target, work=work)
+        record = work / "operation.json"
+        complete = json.loads(record.read_bytes())
+        incomplete = json.dumps({key: value for key, value in complete.items() if key != "updates"})
+        for label, data in (("truncated", record.read_bytes()[:40]), ("not an object", b"[]\n"),
+                            ("missing field", incomplete.encode("utf-8"))):
+            with self.subTest(label):
+                record.write_bytes(data)
+                outcome = transactions.apply(work)
+                self.assertEqual((outcome.status, outcome.reason), ("REFUSED", "operation"))
+                for call in (transactions.push, transactions.reconcile):
+                    with self.assertRaises(Refused) as caught:
+                        call(work)
+                    self.assertEqual(caught.exception.code, "operation")
+        self.assertEqual(refs(target), {})
+        self.assertFalse((work / "attempts.log").exists(), "no push may be attempted")
+
     def test_observation_failures_are_unknown_never_absence(self):
         """Local bootstrap: auth/transport/output/fetch failures stay UNKNOWN and never allow bootstrap."""
         source, b = self.lifecycle_source()
@@ -186,11 +269,14 @@ exit 1
         target, source, b = self.bootstrapped()
         empty = self.bare("empty target.git")
         out("config", "--global", "uploadpack.hideRefs", "refs/")
-        for remote in (target, empty):
-            with self.subTest(remote=remote.name):
-                with self.assertRaises(state.Unknown):
+        masking = self.tmp / "empty masking.gitconfig"
+        masking.write_text("", encoding="utf-8")
+        # GIT_CONFIG changes what `git config` reads but not what upload-pack hides, so it must not mask the check.
+        for remote, env in ((target, {}), (empty, {}), (target, {"GIT_CONFIG": str(masking)})):
+            with self.subTest(remote=remote.name, masked=bool(env)):
+                with mock.patch.dict(os.environ, env), self.assertRaises(state.Unknown):
                     transactions.prepare_bootstrap(source=source, commit=b, remote=remote,
-                                                   work=self.tmp / f"op {remote.name}")
+                                                   work=self.tmp / f"op {remote.name} {len(env)}")
         self.assertEqual(refs(empty), {})
 
     def test_bootstrap_retry_in_unsupported_state_is_mixed_not_noop(self):
