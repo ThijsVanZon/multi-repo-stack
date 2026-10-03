@@ -76,6 +76,53 @@ class AssessmentTests(ConsumerTestCase):
                 self.assertTrue(any(problem in found for found in assessment["problems"]), assessment["problems"])
                 self.assertIsNone(assessment["acceptance"])
 
+    def test_a_record_counts_only_with_the_facts_of_an_actual_execution(self):
+        """Collection versus acceptance: a record whose execution facts are absent or contradicted is REFUSED,
+        never a passing pair: no executable, times or output identity, a start before C was observed, an
+        unverified checkout, a runner reduced to its OS label, no dev observation, a boolean exit status, a pass
+        stating a failure reason, no pstack identity, or all execution facts at once. The real record is the
+        SUFFICIENT control."""
+        target, _, c = self.consumer("research", RESEARCH)
+        _, _, record = self.collect(target, "research")
+        verdict = self.verdict(record)
+        code, control = self.assess(target, [record], verdict, name="control")
+        self.assertEqual((code, control["status"]), (0, "SUFFICIENT"), control)
+        pair = f"synthetic-slope/{NATIVE}"
+
+        def result(**values):
+            return lambda r: r["results"][0].update(values)
+
+        def stripped(r):
+            r.update(runner={"os": NATIVE}, checkout=None, observed=None)
+            r["results"][0].update(executable=None, started=None, finished=None, output=None)
+
+        untimed = f"{pair}: no UTC start and finish after C was observed"
+        cases = {
+            "no executable": (result(executable=None), f"{pair}: the executable that ran is not identified"),
+            "no execution times": (result(started=None, finished=None), untimed),
+            "started before C was observed": (result(started="2000-01-01T00:00:00Z"), untimed),
+            "no output identity": (result(output=None), f"{pair}: its output is not identified"),
+            "unverified checkout": (
+                lambda r: r.update(checkout={"bytes": "not checked", "executable_bits": "not checked"}),
+                "the checkout of C is not recorded as exact"),
+            "runner reduced to its OS label": (lambda r: r.update(runner={"os": NATIVE}),
+                                               "the runner does not identify its actual OS, platform, Python and Git"),
+            "no dev observation": (lambda r: r.update(observed=None),
+                                   "C's observation as dev at a UTC time is missing"),
+            "boolean exit status": (result(exit=False), f"{pair} is recorded as passing with exit status False"),
+            "pass stating a failure reason": (result(reason="exit status 1"),
+                                              f"{pair}: a passing result states a reason: 'exit status 1'"),
+            "no pstack identity": (lambda r: r.update(pstack=None), "the pstack source is not identified"),
+            "all execution facts removed": (stripped, f"{pair}: the executable that ran is not identified"),
+        }
+        for name, (change, problem) in cases.items():
+            with self.subTest(name):
+                code, assessment = self.assess(target, [self.edited(record, name, change)], verdict, name=name)
+                self.assertEqual((code, assessment["status"], assessment["acceptance"]), (3, "REFUSED", None))
+                self.assertTrue(any(found.startswith(f"record 1: {problem}") for found in assessment["problems"]),
+                                assessment["problems"])
+        self.assertEqual(refs(target), {DEV: c})
+
     def test_records_must_bind_this_C_N_criteria_and_the_selected_sources(self):
         """Candidate identity / Source changes: a record is refused when its repository, version, criteria
         identity or shared/pstack identity differs from what exact C selects; the unedited control is

@@ -383,6 +383,53 @@ class CollectionTests(ConsumerTestCase):
         else:
             self.assertEqual((code, report["status"]), (0, "PASSED"), report)
 
+    def test_tracked_links_resolving_outside_the_checkout_stop_collection_before_any_check(self):
+        """Source preservation / Portability: a committed `build` link that resolves outside the isolated
+        checkout, by an absolute target, a relative one or a chain through another tracked link, refuses
+        collection before any check runs, so an ordinary build cannot overwrite stand-in caller work; a
+        relative link to an owned directory inside C is the passing control. Windows refuses every link."""
+        outside = self.tmp / "caller work"
+        outside.mkdir()
+        marker = outside / "marker.txt"
+        marker.write_bytes(b"PRESERVE ME\n")
+        # From <collection scratch>/<pair>/checkout, three levels up is the temporary folder holding self.tmp.
+        relative = f"../../../{self.tmp.name}/caller work"
+        fixtures = {"absolute": {"build": str(outside)}, "relative": {"build": relative},
+                    "chained": {"a/b/up": "../..", "build": f"a/b/up/{relative}"},
+                    "internal control": {"build": "output", "output/keep.txt": None}}
+        _, source, b = self.consumer("probe", {"build": probe("build-through-link")})
+        for name, entries in fixtures.items():
+            with self.subTest(name):
+                out("-C", source, "read-tree", b)
+                for path, link in entries.items():
+                    blob = out("-C", source, "hash-object", "-w", "--stdin",
+                               input=(link or "an owned build directory\n").encode("utf-8"))
+                    out("-C", source, "update-index", "--add", "--cacheinfo",
+                        f"{'120000' if link else '100644'},{blob},{path}")
+                linked = out("-C", source, "commit-tree", out("-C", source, "write-tree"), "-p", b,
+                             "-m", f"Add a {name} build link")
+                repository = self.bare(f"{name} links.git")
+                out("-C", source, "push", "--quiet", "--no-follow-tags", repository, f"{linked}:refs/heads/dev")
+
+                code, report, path = self.collect(repository, name)
+
+                self.assertEqual(marker.read_bytes(), b"PRESERVE ME\n", "caller work is untouched")
+                self.assertEqual(refs(repository), {DEV: linked})
+                if os.name == "nt":
+                    self.assertEqual((code, report["status"]), (3, "REFUSED"), report)
+                    self.assertIn("is a symbolic link, which a checkout on this platform does not reproduce exactly",
+                                  report["reason"])
+                elif name == "internal control":
+                    self.assertEqual((code, report["status"]), (0, "PASSED"), report)
+                    self.assertEqual(report["record"]["results"][0]["evidence"]["text"], "wrote build/marker.txt\n")
+                    continue
+                else:
+                    self.assertEqual((code, report["status"]), (3, "REFUSED"), report)
+                    self.assertIn(f"has tracked links that resolve outside its isolated checkout: "
+                                  f"['build -> {entries['build']}']; only relative links inside C are supported, "
+                                  "so no check ran", report["reason"])
+                self.assertFalse(path.exists(), "no record of a check that never ran")
+
 
 if __name__ == "__main__":
     unittest.main()

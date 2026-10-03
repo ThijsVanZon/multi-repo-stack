@@ -8,6 +8,10 @@ previous release (or the frozen intent at a first release), decides every propos
 leaves no limitation unresolved. Anything absent is INCOMPLETE; anything contradictory, failed or unbound is
 REFUSED. These are content and binding checks for trusted operators: the tool cannot authenticate who wrote a
 verdict or whether its statements are true.
+
+A record counts only with the facts of an actual execution: C observed as dev at a UTC time, the runner's OS,
+platform and runtimes, an exact checkout of C, the pstack source, and for each passing result the executable,
+its start and finish times and its output identity. Receipt replay applies the same record validation.
 """
 
 from __future__ import annotations
@@ -16,6 +20,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from . import config, sources
 
@@ -32,7 +37,12 @@ _RESULT_KEYS = {"check", "environment", "argv", "executable", "started", "finish
 _ATTESTATION_KEYS = {"format", "repository", "candidate", "version", "criteria", "verifier", "behavior", "evidence",
                      "reuse", "limitations", "verdict"}
 _OBSERVATION_KEYS = {"id", "source_commit", "harness", "scope"}
+_RUNNER_KEYS = {"os", "wsl", "platform", "python", "git"}
+_PSTACK_KEYS = {"repository", "commit", "path", "tree"}
+_DEV = "refs/heads/dev"  # where collection observes C (state.DEV; state imports this module)
+_STAMP = "%Y-%m-%dT%H:%M:%SZ"
 _OID = re.compile(r"[0-9a-f]{40,}")
+_SHA256 = re.compile(r"[0-9a-f]{64}")
 
 
 @dataclass
@@ -59,6 +69,18 @@ def _text(value) -> bool:
     return isinstance(value, str) and bool(value.strip())
 
 
+def _sha256(value) -> bool:
+    return isinstance(value, str) and bool(_SHA256.fullmatch(value))
+
+
+def _utc(value) -> bool:
+    """A UTC time exactly as collection writes it, so that such times also order as text."""
+    try:
+        return isinstance(value, str) and datetime.strptime(value, _STAMP).strftime(_STAMP) == value
+    except ValueError:
+        return False
+
+
 def _evidence_problem(evidence, required: bool) -> str | None:
     if evidence == {"present": False}:
         return "required evidence is absent" if required else None
@@ -75,6 +97,52 @@ def _evidence_problem(evidence, required: bool) -> str | None:
     return None
 
 
+def _provenance(record) -> list[str]:
+    """Problems with the facts that every result of a record depends on. Without them no result counts."""
+    problems = []
+    observed, runner, pstack = record["observed"], record["runner"], record["pstack"]
+    if (not isinstance(observed, dict) or set(observed) != {"ref", "at"} or observed["ref"] != _DEV
+            or not _utc(observed["at"])):
+        problems.append("C's observation as dev at a UTC time is missing")
+    if (not isinstance(runner, dict) or set(runner) != _RUNNER_KEYS or runner["os"] not in config.NATIVE_OS
+            or not isinstance(runner["wsl"], bool) or (runner["wsl"] and runner["os"] != "linux")
+            or not all(_text(runner[key]) for key in ("platform", "python", "git"))):
+        problems.append("the runner does not identify its actual OS, platform, Python and Git")
+    elif record["checkout"] != {"bytes": "exact",
+                                "executable_bits": "not represented" if runner["os"] == "windows" else "verified"}:
+        problems.append(f"the checkout of C is not recorded as exact, as a {runner['os']} runner verifies it")
+    if not _source(pstack):
+        problems.append("the pstack source is not identified")
+    return problems
+
+
+def _source(pstack) -> bool:
+    """A pstack source identity as collection records it: repository, commit, subtree path and tree."""
+    return (isinstance(pstack, dict) and set(pstack) == _PSTACK_KEYS
+            and all(isinstance(pstack[key], str) for key in _PSTACK_KEYS)
+            and _text(pstack["repository"]) and _text(pstack["path"])
+            and bool(_OID.fullmatch(pstack["commit"])) and bool(_OID.fullmatch(pstack["tree"])))
+
+
+def _execution(result, observed_at: str | None) -> str | None:
+    """Why a result recorded as passing does not show an actual execution after C was observed (a missing
+    observation is reported once, by _provenance)."""
+    executable, output = result["executable"], result["output"]
+    started, finished = result["started"], result["finished"]
+    if not isinstance(executable, dict) or set(executable) != {"name", "sha256"} or not _text(executable["name"]) \
+            or not _sha256(executable["sha256"]):
+        return "the executable that ran is not identified"
+    if not (_utc(started) and _utc(finished) and started <= finished
+            and (observed_at is None or observed_at <= started)):
+        return "no UTC start and finish after C was observed"
+    if not isinstance(output, dict) or set(output) != {"bytes", "sha256"} or type(output["bytes"]) is not int \
+            or output["bytes"] < 0 or not _sha256(output["sha256"]):
+        return "its output is not identified"
+    if result["reason"] is not None:
+        return f"a passing result states a reason: {result['reason']!r}"
+    return None
+
+
 def _record(record, selection: config.Selection, facts: dict) -> tuple[list[str], set]:
     """Problems with one check record, and the (check, environment) pairs it shows passing."""
     if not isinstance(record, dict) or set(record) != _RECORD_KEYS or record["format"] != RECORD_FORMAT:
@@ -83,7 +151,10 @@ def _record(record, selection: config.Selection, facts: dict) -> tuple[list[str]
     for key in ("repository", "candidate", "version", "criteria", "shared", "pstack"):
         if key in facts and record[key] != facts[key]:
             problems.append(f"{key} is {record[key]!r}, but the assessed candidate has {facts[key]!r}")
+    provenance = _provenance(record)
+    problems += provenance
     runner = record["runner"].get("os") if isinstance(record["runner"], dict) else None
+    at = record["observed"].get("at") if isinstance(record["observed"], dict) else None
     if not isinstance(record["results"], list):
         return problems + ["results are malformed"], passed
     for result in record["results"]:
@@ -102,11 +173,12 @@ def _record(record, selection: config.Selection, facts: dict) -> tuple[list[str]
             problems.append(f"{where} ran {result['argv']!r}, not the candidate's declared command")
         elif result["outcome"] != "pass":
             problems.append(f"{where} did not pass: {result['outcome']!r} ({result['reason']})")
-        elif result["exit"] != 0:
+        elif type(result["exit"]) is not int or result["exit"] != 0:
             problems.append(f"{where} is recorded as passing with exit status {result['exit']!r}")
-        elif _evidence_problem(result["evidence"], check.evidence_required):
-            problems.append(f"{where}: {_evidence_problem(result['evidence'], check.evidence_required)}")
-        else:
+        elif problem := (_execution(result, at if _utc(at) else None)
+                         or _evidence_problem(result["evidence"], check.evidence_required)):
+            problems.append(f"{where}: {problem}")
+        elif not provenance:
             passed.add((name, label))
     return problems, passed
 
@@ -181,9 +253,10 @@ def _missing(selection: config.Selection, passed: set) -> list[str]:
             if (name, label) not in passed]
 
 
-def previous_criteria(store, observed) -> str | None:
-    """Criteria identity of the latest contract release, against which C's criteria changes are judged."""
-    return config.at_commit(store, observed.releases[-1].candidate).criteria if observed.releases else None
+def previous_criteria(store, release) -> str | None:
+    """Criteria identity of `release`, the contract release before a candidate, against which the candidate's
+    criteria changes are judged; None at a first release, which is judged against the frozen intent."""
+    return config.at_commit(store, release.candidate).criteria if release is not None else None
 
 
 def assess(store, observed, candidate: str, records: list[bytes], attestation: bytes | None,
@@ -201,7 +274,7 @@ def assess(store, observed, candidate: str, records: list[bytes], attestation: b
         if selection.checks is None:
             raise config.ConfigError(f"{candidate} declares no lifecycle checks in {config.FILENAME}")
         shared, pinned = sources.selected(selection, candidate, pstack)
-        previous = previous_criteria(store, observed)
+        previous = previous_criteria(store, observed.releases[-1] if observed.releases else None)
     except (config.ConfigError, sources.SourceError) as exc:
         result.problems.append(str(exc))
         return result
@@ -252,8 +325,10 @@ def assess(store, observed, candidate: str, records: list[bytes], attestation: b
 
 def payload_problems(store, candidate: str, version: str, repository: str, payload: dict) -> list[str]:
     """Why an assessed acceptance read back from a receipt does not hold for exactly this C, N and repository.
-    The record and verdict bindings are checked again; sources are compared across records and with C's
-    shared pin, since an observer has no checkout to verify."""
+    Records and verdict are validated again against the facts C itself provides: its criteria, its shared pin
+    and, when C pins pstack itself (as the shared project does), that pin. A consumer's pstack pin belongs to
+    the shared revision and every pstack tree to a checkout; an observer has neither, so it checks those only
+    for form and for agreement across records. The caller binds `previous` to the retained release history."""
     if set(payload) != {"format", "criteria", "results", "verdict"} or payload["format"] != ACCEPTANCE_FORMAT:
         return [f"not a complete {ACCEPTANCE_FORMAT} acceptance"]
     selection = config.at_commit(store, candidate)
@@ -266,11 +341,16 @@ def payload_problems(store, candidate: str, version: str, repository: str, paylo
     records = payload["results"] if isinstance(payload["results"], list) else []
     facts = {"repository": repository, "candidate": candidate, "version": version, "criteria": selection.criteria,
              "shared": sources.shared_identity(selection, candidate)}
-    if records:
-        facts["pstack"] = records[0].get("pstack") if isinstance(records[0], dict) else None
     problems, passed = [], set()
     for record in records:
         found, ok = _record(record, selection, facts)
         problems += found
         passed |= ok
+    used = [record["pstack"] for record in records if isinstance(record, dict) and _source(record.get("pstack"))]
+    if any(source != used[0] for source in used):
+        problems.append("the records name different pstack sources")
+    pin = selection.pstack
+    if pin is not None and any((source["repository"], source["commit"], source["path"])
+                               != (pin.repository, pin.commit, pin.path) for source in used):
+        problems.append(f"a record's pstack source is not {pin.repository}@{pin.commit} ({pin.path}), which C pins")
     return problems + _missing(selection, passed) + _verdict(payload["verdict"], facts, criteria["previous"], None)

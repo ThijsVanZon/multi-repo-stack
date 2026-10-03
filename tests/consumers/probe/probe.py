@@ -1,5 +1,5 @@
 """Probe fixture check (test code): each mode exercises one collection boundary. Links and moved folders
-point only inside the check's own disposable checkout."""
+that a probe creates point only inside the check's own disposable checkout."""
 import json
 import os
 import subprocess
@@ -59,6 +59,9 @@ elif mode == "outputs":
     os.makedirs(os.path.join("build", "out"))
     write(b"disposable\n", os.path.join("build", "out", "artifact.bin"))
     write(b"wrote untracked build outputs\n")
+elif mode == "build-through-link":  # an ordinary build writing into whatever C's tracked `build` link names
+    write(b"OVERWRITTEN BY BUILD\n", os.path.join("build", "marker.txt"))
+    write(b"wrote build/marker.txt\n")
 elif mode == "fail":
     write(b"the check found a problem\n")
     sys.exit(3)

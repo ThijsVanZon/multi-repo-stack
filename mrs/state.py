@@ -246,7 +246,8 @@ def contract_release(store: Path, name: str, oid: str) -> Release:
         if selection.applicability != "lifecycle" or selection.repository != receipt["repository"]:
             raise Malformed(f"tag {name}: receipt repository/applicability do not match the candidate's selector")
         if isinstance(receipt["acceptance"], dict) and "format" in receipt["acceptance"]:
-            # The checked path's assessed acceptance must still hold for exactly this C, N and repository.
+            # The checked path's assessed acceptance must still hold for exactly this C, N and repository;
+            # analyze binds the criteria it was judged against to the release history.
             problems = acceptance.payload_problems(store, candidate, name, receipt["repository"], receipt["acceptance"])
             if problems:
                 raise Malformed(f"tag {name}: assessed acceptance does not hold: {'; '.join(problems[:3])}")
@@ -330,6 +331,15 @@ def analyze(store: Path, refs: dict[str, str]) -> State:
                 problems.append(f"release {release.version} does not continue line {previous.next_version}")
             if not ancestor(store, previous.next_commit, release.candidate):
                 problems.append(f"release {release.version} does not descend from {previous.version}'s next line")
+        judged = json.loads(release.receipt)["acceptance"]
+        if "format" in judged:  # an assessed acceptance judged its criteria against the actual predecessor
+            expected = acceptance.previous_criteria(store, previous)
+            if judged["criteria"]["previous"] != expected:
+                problems.append(
+                    f"malformed contract receipt blocks mutation: tag {release.version}: its acceptance judged "
+                    f"criteria changes against {judged['criteria']['previous']!r}, but "
+                    + (f"the previous contract release {previous.version} has {expected!r}" if previous else
+                       "no contract release precedes it (None: a first release is judged against the frozen intent)"))
         previous = release
     if previous is None:
         if main is not None:

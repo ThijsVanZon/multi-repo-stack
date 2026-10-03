@@ -4,7 +4,8 @@ The candidate C is the observed dev of a lifecycle repository, N is C's VERSION,
 criteria C itself declares. Each (check, environment) pair whose environment requires this native OS runs
 as a literal argv without a shell, in its own fresh checkout of exactly C, with a fresh runner-owned
 evidence path outside that checkout. Tracked bytes, modes and links are verified before and after every
-command; the selected shared and pstack sources before and after the whole run. Records hold no local paths.
+command, and no command runs while a tracked link resolves outside its checkout; the selected shared and
+pstack sources are verified before and after the whole run. Records hold no local paths.
 """
 
 from __future__ import annotations
@@ -165,6 +166,20 @@ def _mismatches(checkout: Path, store: Path, entries) -> list[str]:
     return problems
 
 
+def _escaping_links(checkout: Path, entries) -> list[str]:
+    """Tracked links that resolve, through any chain of links, outside the isolated checkout: a check writing
+    through one would change files elsewhere, such as the caller's work, instead of disposable outputs.
+    Resolution is the filesystem's own. Windows checkouts have no links (_entries refuses them)."""
+    root = os.path.realpath(checkout)
+    escaping = []
+    for name, mode, _ in entries:
+        if mode == "120000":
+            resolved = os.path.realpath(checkout / name)
+            if resolved != root and not resolved.startswith(root + os.sep):
+                escaping.append(f"{name} -> {os.readlink(checkout / name)}")
+    return escaping
+
+
 def _materialize(checkout: Path, store: Path, commit: str) -> None:
     git.check(["init", "--quiet", "--template=", str(checkout)])
     (checkout / ".git" / "info").mkdir()
@@ -209,6 +224,10 @@ def _run(folder: Path, store: Path, candidate: str, entries, name: str, label: s
     before = _mismatches(checkout, store, entries)
     if before:
         raise Refused(f"a checkout of {candidate} here is not exact: {before[:5]}")
+    escaping = _escaping_links(checkout, entries)
+    if escaping:
+        raise Refused(f"{candidate} has tracked links that resolve outside its isolated checkout: {escaping[:5]}; "
+                      "only relative links inside C are supported, so no check ran")
     result = {"check": name, "environment": label, "argv": list(check.argv), "executable": None,
               "started": None, "finished": None, "exit": None, "output": None, "evidence": None,
               "outcome": "invalid", "reason": None}
