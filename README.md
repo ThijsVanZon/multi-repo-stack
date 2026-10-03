@@ -14,6 +14,7 @@ Implemented and exercised by tests against disposable local repositories:
   - **Bootstrap:** guarded dev-only bootstrap of an exact prepared commit.
   - **Release:** preparation of an exact release (receipt tag T on C, and D, the direct child that changes only `VERSION`), then one atomic `main`/tag/`dev` push with explicit leases, `--no-follow-tags` and `--recurse-submodules=no`.
   - **Reconciliation:** read-only, giving COMPLETED, NOT_APPLIED, DIVERGED, MIXED or UNKNOWN.
+  - **Saved operations:** apply, the push primitive and reconciliation refuse an operation record unless it is exactly what its operation repository prepared. A bootstrap may only create `dev` at B, expecting it absent. A release may only move `main` from P (or absence) to C, create tag N at T and move `dev` from C to D. Its other facts must match T's validated receipt. A changed or unusable record is refused before any push and is never repaired.
 
 Deliberate Slice 1 limits:
 

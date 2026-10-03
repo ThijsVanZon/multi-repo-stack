@@ -106,6 +106,8 @@ _RECORD_KEYS = {
 
 
 def load(work: Path) -> dict:
+    """The operation record, refused unless it is exactly the operation its store prepared. Every apply,
+    push and reconciliation loads through here; a record is never repaired."""
     path = Path(work) / OPERATION_FILE
     try:
         operation = json.loads(path.read_bytes())
@@ -114,7 +116,47 @@ def load(work: Path) -> dict:
     kind = operation.get("kind") if isinstance(operation, dict) else None
     if not isinstance(kind, str) or operation.get("format") != OPERATION_FORMAT or set(operation) != _RECORD_KEYS.get(kind):
         raise Refused("operation", f"{path} is not a complete {OPERATION_FORMAT} record")
+    try:
+        facts, updates, leases = _prepared(Path(work) / STORE, operation)
+    except (state.NotContract, state.Malformed, state.Unknown, config.ConfigError, versions.VersionError,
+            git.GitError) as exc:
+        raise Refused("operation", f"{path} does not match the objects prepared in its store: {exc}") from None
+    for key, value in facts.items():
+        if operation[key] != value:
+            raise Refused("operation", f"{path}: {key} is {operation[key]!r}, but the prepared objects give {value!r}")
+    if not isinstance(operation["remote"], str) or operation["updates"] != updates or operation["expected"] != leases:
+        raise Refused("operation", f"{path} must name its destination and exactly the updates {updates} "
+                                   f"with leases {leases}")
     return operation
+
+
+def _prepared(store: Path, operation: dict) -> tuple[dict, dict, dict]:
+    """The record facts, ref updates and leases that the objects prepared in `store` allow: bootstrap
+    creates only dev at B; a release moves main P->C, creates tag N at T and moves dev C->D."""
+    if operation["kind"] == "bootstrap":
+        commit = _prepared_object(store, "refs/mrs/op/bootstrap^{commit}")
+        facts = {"repository": config.at_commit(store, commit).repository,
+                 "version": str(versions.parse_file(git.read_file(store, commit, "VERSION") or b""))}
+        return facts, {DEV: commit}, {DEV: None}
+    tag = _prepared_object(store, "refs/mrs/op/tag^{tag}")
+    release = state.contract_release(store, operation["version"], tag)  # the existing C/T/D invariants
+    receipt = json.loads(release.receipt)
+    facts = {key: receipt[key] for key in ("repository", "version", "candidate", "next")}
+    facts.update(tag=tag, receipt_sha256=hashlib.sha256(release.receipt).hexdigest())
+    previous = operation["expected"].get(MAIN) if isinstance(operation["expected"], dict) else None
+    if previous is not None and not state.ancestor(
+            store, state.exact_commit(store, previous, "expected main", len(tag)), release.candidate):
+        raise Refused("operation", f"expected main {previous} is not an ancestor of the candidate")
+    tag_ref = f"refs/tags/{release.version}"
+    return (facts, {MAIN: release.candidate, tag_ref: tag, DEV: release.next_commit},
+            {MAIN: previous, tag_ref: None, DEV: release.candidate})
+
+
+def _prepared_object(store: Path, rev: str) -> str:
+    found = git.run(["-C", str(store), "rev-parse", "--verify", "--quiet", rev])
+    if not found.ok:
+        raise Refused("operation", f"the operation store {store} holds no prepared {rev}")
+    return found.out
 
 
 def _identity_env(identity: Identity, when: datetime) -> dict[str, str]:
@@ -282,19 +324,6 @@ def _classify_release(store: Path, operation: dict, refs: dict[str, str]) -> Out
                    f"observed main={seen_main} tag={seen_tag} dev={seen_dev}", refs)
 
 
-def _damaged(store: Path, operation: dict) -> str | None:
-    for ref, new in operation["updates"].items():
-        kind = "tag" if ref.startswith("refs/tags/") else "commit"
-        if git.object_type(store, new) != kind:
-            return f"prepared {kind} {new} for {ref} is missing from {store}"
-    if operation["kind"] == "release":
-        try:
-            state.contract_release(store, operation["version"], operation["tag"])
-        except (state.NotContract, state.Malformed, state.Unknown) as exc:
-            return f"prepared tag no longer validates: {exc}"
-    return None
-
-
 # --- application -----------------------------------------------------------------------------
 
 def _same_path(reported: str, destination: str) -> bool:
@@ -379,9 +408,6 @@ def apply(work: Path, *, now: datetime | None = None) -> Outcome:
         return Outcome("REFUSED", exc.code, exc.detail)
     except state.Unknown as exc:
         return Outcome("UNKNOWN", "destination", str(exc))
-    damage = _damaged(store, operation)
-    if damage:
-        return Outcome("REFUSED", "operation", damage)
     before = _classify(store, destination, operation)
     if before.status == "COMPLETED":
         return Outcome("NOOP", "completed", before.detail, before.refs)

@@ -132,7 +132,7 @@ def ancestor(store: Path, older: str, newer: str) -> bool:
         raise Unknown(f"missing history: {exc}") from None
 
 
-def _exact_commit(store: Path, value, what: str, width: int) -> str:
+def exact_commit(store: Path, value, what: str, width: int) -> str:
     """A full commit ID naming itself; names, abbreviations, IDs of another object format (`width` is
     the length of IDs in this repository) and other object types are malformed. A well-formed ID whose
     object is missing is UNKNOWN."""
@@ -182,6 +182,7 @@ class Release:
     next_commit: str
     next_version: Version
     repository: str
+    receipt: bytes  # the validated canonical receipt line
 
 
 def _strict_json(data: bytes) -> dict:
@@ -235,7 +236,7 @@ def contract_release(store: Path, name: str, oid: str) -> Release:
         raise Malformed(f"tag {name}: tag name, tag header and receipt version disagree")
     try:
         version = versions.parse(name)
-        candidate = _exact_commit(store, receipt["candidate"], f"tag {name}: candidate", len(oid))
+        candidate = exact_commit(store, receipt["candidate"], f"tag {name}: candidate", len(oid))
         peeled = git.run(["-C", str(store), "rev-parse", "--verify", "--quiet", f"{oid}^{{commit}}"]).out
         if headers["object"] != candidate or headers["type"] != "commit" or peeled != candidate:
             raise Malformed(f"tag {name}: must directly target the receipt's candidate commit")
@@ -250,13 +251,13 @@ def contract_release(store: Path, name: str, oid: str) -> Release:
         next_version = versions.parse(nxt["version"])
         if opened.isoformat() != nxt["opened"] or next_version != versions.next_line(version, opened):
             raise Malformed(f"tag {name}: next line {next_version} does not follow from {name} opened {opened}")
-        next_commit = _exact_commit(store, nxt["commit"], f"tag {name}: next-line commit", len(oid))
+        next_commit = exact_commit(store, nxt["commit"], f"tag {name}: next-line commit", len(oid))
         problem = next_line_violation(store, candidate, next_commit, next_version, opened)
         if problem:
             raise Malformed(f"tag {name}: {problem}")
     except (versions.VersionError, config.ConfigError, ValueError, TypeError, git.GitError) as exc:
         raise Malformed(f"tag {name}: {exc}") from None
-    return Release(version, oid, candidate, next_commit, next_version, receipt["repository"])
+    return Release(version, oid, candidate, next_commit, next_version, receipt["repository"], data)
 
 
 @dataclass
