@@ -68,11 +68,14 @@ def _destination(remote: str | Path) -> str:
 
 
 def _check_rewrites(store: Path, destination: str) -> None:
-    rules = git.run(["-C", str(store), "config", "--get-regexp", r"^url\..*\.(push)?insteadof$"])
-    for line in rules.out.splitlines() if rules.ok else []:
-        key, _, prefix = line.partition(" ")
-        if prefix and (destination.startswith(prefix) or Path(destination).as_posix().startswith(prefix)):
-            raise Refused("destination", f"ambient {key} would rewrite the push destination")
+    """Refuse ambient configuration that would send observation or the push somewhere else."""
+    forms = {destination, Path(destination).as_posix()}
+    rules = git.run(["-C", str(store), "config", "-z", "--get-regexp", r"^(url\..*\.(push)?insteadof|remote\..*)$"])
+    for record in rules.stdout.decode("utf-8", "replace").split("\0") if rules.ok else []:
+        key, _, value = record.partition("\n")
+        rewrites = key.startswith("url.") and value and any(form.startswith(value) for form in forms)
+        if rewrites or any(key.startswith(f"remote.{form}.") for form in forms):
+            raise Refused("destination", f"ambient {key} would change where the destination resolves")
 
 
 def _new_store(work: Path) -> Path:
@@ -225,13 +228,17 @@ def _classify(store: Path, destination: str, operation: dict) -> Outcome:
         if operation["kind"] == "bootstrap":
             return _classify_bootstrap(store, operation, refs)
         return _classify_release(store, operation, refs)
-    except state.Unknown as exc:
+    except (state.Unknown, git.GitError) as exc:
         return Outcome("UNKNOWN", "observation", str(exc))
 
 
 def _classify_bootstrap(store: Path, operation: dict, refs: dict[str, str]) -> Outcome:
     prepared, dev = operation["updates"][DEV], refs.get(DEV)
     if dev is not None and state.ancestor(store, prepared, dev):
+        observed = state.analyze(store, refs)
+        if observed.kind != "LIFECYCLE":
+            return Outcome("MIXED", "mixed", f"dev contains {prepared} but the state is unsupported: "
+                                             + "; ".join(observed.problems), refs)
         return Outcome("COMPLETED", "completed", f"dev is {prepared} or descends from it", refs)
     if not refs:
         return Outcome("NOT_APPLIED", "ready", "target is empty", refs)
@@ -276,20 +283,34 @@ def _damaged(store: Path, operation: dict) -> str | None:
 
 # --- application -----------------------------------------------------------------------------
 
-def _push_result(result: git.Result, refs: set[str]) -> str:
-    statuses = {}
+def _same_path(reported: str, destination: str) -> bool:
+    try:
+        return os.path.samefile(reported, destination)
+    except OSError:
+        return False
+
+
+def _push_result(result: git.Result, refs: set[str], destination: str) -> str:
+    """Classify a porcelain push. The caller always re-observes; this only names the reported cause."""
+    statuses, reported = {}, None
     for line in result.stdout.decode("utf-8", "replace").splitlines():
         parts = line.split("\t")
-        if len(parts) == 3 and len(parts[0]) == 1:
+        if line.startswith("To "):
+            reported = line[3:]
+        elif len(parts) == 3 and len(parts[0]) == 1:
             statuses[parts[1].rpartition(":")[2]] = (parts[0], parts[2])
+    if reported is not None and not _same_path(reported, destination):
+        return "destination-mismatch"
     summaries = " ".join(summary for _, summary in statuses.values())
     if result.ok and set(statuses) == refs and all(flag in "*+ " for flag, _ in statuses.values()):
         return "success"
-    if "(stale info)" in summaries or (statuses and (b"but expected" in result.stderr
-                                                     or b"reference already exists" in result.stderr)):
+    if "(stale info)" in summaries:
         return "stale"
     if "hook declined" in summaries:
         return "policy"
+    server_update_failed = any(text in summaries for text in ("transaction failed", "failed to update ref"))
+    if server_update_failed and (b"but expected" in result.stderr or b"reference already exists" in result.stderr):
+        return "stale"
     if "rejected]" in summaries:
         return "rejected"
     if not statuses and b"does not support --atomic push" in result.stderr:
@@ -311,7 +332,7 @@ def push(work: Path) -> str:
         args.append("--atomic")
     args += [f"--force-with-lease={ref}:{old or ''}" for ref, old in operation["expected"].items()]
     args += ["--", destination, *[f"{new}:{ref}" for ref, new in operation["updates"].items()]]
-    return _push_result(git.run(args), set(operation["updates"]))
+    return _push_result(git.run(args), set(operation["updates"]), destination)
 
 
 def reconcile(work: Path) -> Outcome:
@@ -344,7 +365,13 @@ def apply(work: Path, *, now: datetime | None = None) -> Outcome:
         if now.year != opened.year:
             return Outcome("REFUSED", "year-changed", f"line {operation['next']['version']} was opened for "
                            f"{opened.year} and the operation is not applied; prepare it again", before.refs)
-    pushed = push(work)
+    try:
+        pushed = push(work)
+    except Refused as exc:
+        return Outcome("REFUSED", exc.code, exc.detail, before.refs)
+    if pushed == "destination-mismatch":
+        return Outcome("UNKNOWN", pushed, "Git reported a push location other than the destination; inspect both",
+                       before.refs)
     after = _classify(store, destination, operation)
     if after.status == "COMPLETED":
         note = "" if pushed == "success" else f" (push reported {pushed}; reconciliation found completion)"

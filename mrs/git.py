@@ -9,11 +9,12 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-# Variables that would silently redirect commands to another repository or index.
-_REPOSITORY_ENV = (
+# Variables that would silently redirect commands to another repository or index, or inject the
+# command-line configuration of a parent Git process (e.g. when run from a hook).
+_SCRUBBED_ENV = (
     "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
     "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR", "GIT_NAMESPACE",
-    "GIT_QUARANTINE_PATH", "GIT_PREFIX",
+    "GIT_QUARANTINE_PATH", "GIT_PREFIX", "GIT_CONFIG_PARAMETERS",
 )
 
 
@@ -33,7 +34,6 @@ def executable() -> str:
 
 @dataclass(frozen=True)
 class Result:
-    args: tuple[str, ...]
     returncode: int
     stdout: bytes
     stderr: bytes
@@ -53,12 +53,14 @@ class Result:
 
 def run(args: list[str], *, cwd: Path | str | None = None, input: bytes | None = None,
         env: dict[str, str] | None = None) -> Result:
-    full_env = {k: v for k, v in os.environ.items() if k not in _REPOSITORY_ENV}
-    full_env.update({"LC_ALL": "C", "LANGUAGE": "C", "GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "never"})
+    full_env = {k: v for k, v in os.environ.items() if k not in _SCRUBBED_ENV}
+    # Replace refs would let a commit ID stand for different content; lifecycle facts use real objects.
+    full_env.update({"LC_ALL": "C", "LANGUAGE": "C", "GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "never",
+                     "GIT_NO_REPLACE_OBJECTS": "1"})
     if env:
         full_env.update(env)
     proc = subprocess.run([executable(), *args], cwd=cwd, input=input, capture_output=True, env=full_env)
-    return Result(tuple(args), proc.returncode, proc.stdout, proc.stderr)
+    return Result(proc.returncode, proc.stdout, proc.stderr)
 
 
 def check(args: list[str], **kwargs) -> Result:

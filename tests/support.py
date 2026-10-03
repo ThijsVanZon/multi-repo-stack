@@ -97,6 +97,19 @@ def tree_digest(path: Path) -> dict[str, str]:
             for p in sorted(path.rglob("*")) if p.is_file()}
 
 
+def forge_tag(repo: Path, name: str, candidate: str, next_commit: str, next_version: str, *,
+              opened: str = "2026-10-03", repository: str = "example/app", header: str | None = None) -> str:
+    """Hand-build a contract-shaped release tag with plumbing only (test code, independent of the tool)."""
+    receipt = {"acceptance": simulated_acceptance(), "candidate": candidate, "format": "multi-repo-stack/receipt/1",
+               "next": {"commit": next_commit, "opened": opened, "version": next_version},
+               "repository": repository, "version": name}
+    header = header or (f"object {candidate}\ntype commit\ntag {name}\n"
+                        "tagger Fixture Forger <fixture-forger@example.invalid> 1790000000 +0000\n")
+    raw = (header.encode("utf-8") + b"\nmulti-repo-stack release receipt v1\n"
+           + json.dumps(receipt, sort_keys=True, separators=(",", ":")).encode("ascii") + b"\n")
+    return out("-C", repo, "hash-object", "-t", "tag", "-w", "--literally", "--stdin", input=raw)
+
+
 def wait_for(marker: Path, timeout: float = 120) -> None:
     """Deterministic barrier: block until a hook announces it reached its point (timeout is only a failsafe)."""
     deadline = time.monotonic() + timeout

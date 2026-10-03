@@ -58,6 +58,17 @@ class FirstTransactionTests(GitTestCase):
         d = operation["next"]["commit"]
         self.assertEqual(git("-C", target, "cat-file", "blob", f"{d}:VERSION").stdout, b"27.1.0\n")
 
+    def test_completed_operation_keeps_its_identity_across_new_year(self):
+        """Time: a completed (or in-flight) operation is reconciled, not relabelled, in a later year."""
+        target, _, _ = self.bootstrapped()
+        work, operation = self.release(target, now=datetime(2026, 12, 31, 23, 59, tzinfo=timezone.utc))
+        before = refs(target)
+        outcome = transactions.apply(work, now=datetime(2027, 1, 1, 0, 1, tzinfo=timezone.utc))
+        self.assertEqual((outcome.status, outcome.reason), ("NOOP", "completed"))
+        self.assertEqual(refs(target), before)
+        self.assertEqual(git("-C", target, "cat-file", "blob", f"{operation['next']['commit']}:VERSION").stdout,
+                         b"26.2.0\n")
+
     def test_unattempted_operation_from_another_year_must_be_prepared_again(self):
         """Time: an operation that is proven not applied keeps no identity across New Year."""
         target, _, b = self.bootstrapped()
@@ -115,6 +126,32 @@ exit 0
         self.assertEqual(refs(target), {DEV: competitor})
         sent = [line.split() for line in (target / "fixture-commands").read_text(encoding="utf-8").splitlines()]
         self.assertIn([b, operation["next"]["commit"], DEV], sent, "client expected dev=C in the real update")
+
+    def test_main_and_tag_leases_reject_in_the_guarded_push_itself(self):
+        """Guarded races: main/tag created after observation are rejected by the push leases themselves."""
+        for ref in (MAIN, TAG):
+            with self.subTest(ref=ref):
+                self.setUp()
+                target, _, b = self.bootstrapped()
+                work, _ = self.prepare(target)
+                rival = self.checkout("rival")
+                rival_commit = self.commit(rival, {"rival.txt": "x\n"}, "rival")
+                out("-C", rival, "push", "--quiet", target, f"HEAD:{ref}")
+                self.assertEqual(transactions.push(work), "stale")
+                self.assertEqual(refs(target), {DEV: b, ref: rival_commit})
+
+    def test_foreign_tag_appearing_after_preparation_blocks_application(self):
+        """Continued history: state is re-validated at apply time, not only at preparation."""
+        target, source, b = self.bootstrapped()
+        work, _ = self.prepare(target)
+        out("-C", source, "tag", "25.3.0", b)
+        out("-C", source, "push", "--quiet", "--no-follow-tags", target, "refs/tags/25.3.0")
+        before = refs(target)
+        outcome = transactions.apply(work, now=NOW)
+        self.assertEqual((outcome.status, outcome.reason), ("REFUSED", "unsupported-state"))
+        self.assertIn("foreign version-shaped tag", outcome.detail)
+        self.assertEqual(refs(target), before)
+        self.assertFalse((work / "attempts.log").exists())
 
     def test_stale_main_and_conflicting_tag_reject(self):
         """Guarded races: a main or tag created after preparation rejects the whole release."""

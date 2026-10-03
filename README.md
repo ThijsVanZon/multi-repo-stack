@@ -8,8 +8,8 @@ This revision is a bounded first increment. It is **not** release 26.1.0. It is 
 
 Implemented and exercised by tests against disposable local repositories:
 
-- **Source and applicability preflight** (`mrs preflight`). It reads the consumer's committed selector and verifies the selected shared checkout and the pinned pstack checkout: exact HEAD, no modified, untracked or ignored content, and content re-hashed against the commit. It prints the verified identities and the instruction files that apply: `context` loads `docs/context.md`; `lifecycle` also loads `docs/lifecycle.md`. `--expect` invalidates a run whose selection changed.
-- **State observation** (`mrs inspect`). It separates absent refs from UNKNOWN, recognizes contract release tags (annotated, directly targeting C, embedding a canonical receipt) and applies the release-history predicates.
+- **Source and applicability preflight** (`mrs preflight`). It reads the consumer's committed selector and verifies the selected shared checkout and the pinned pstack checkout: exact HEAD, no modified, untracked or ignored content, and content re-hashed byte-for-byte against the commit. Replace refs are ignored and checkout filters are not trusted; clone with `--config core.autocrlf=false` if your Git converts line endings. It prints the verified identities and the instruction files that apply: `context` loads `docs/context.md`; `lifecycle` also loads `docs/lifecycle.md`. `--expect` invalidates a run whose selection changed.
+- **State observation** (`mrs inspect`). It separates absent refs from UNKNOWN; hidden-ref configuration, broken refs and missing history count as UNKNOWN. It recognizes contract release tags (annotated, directly targeting C, embedding a canonical receipt that binds exact object IDs) and applies the release-history predicates.
 - **Transaction kernel** (`mrs/transactions.py`, library only):
   - **Bootstrap:** guarded dev-only bootstrap of an exact prepared commit.
   - **Release:** preparation of an exact release (receipt tag T on C, and D, the direct child that changes only `VERSION`), then one atomic `main`/tag/`dev` push with explicit leases, `--no-follow-tags` and `--recurse-submodules=no`.
@@ -17,7 +17,8 @@ Implemented and exercised by tests against disposable local repositories:
 
 Deliberate Slice 1 limits:
 
-- There is no mutation command. The kernel mutates only absolute local bare repositories carrying the `mrs-disposable-fixture` marker, which only test code creates.
+- There is no mutation command. The kernel mutates only absolute local bare repositories carrying the `mrs-disposable-fixture` marker, which only test code creates. It refuses ambient `insteadOf`/`pushInsteadOf` rewrites and remotes named like the destination.
+- The kernel pushes from its own bare operation repository, so submodule recursion has no submodule repository to act on. `--recurse-submodules=no` is defense in depth there, not a separately demonstrable guard.
 - The acceptance payload in a receipt is recorded, not judged. The tests use SIMULATED acceptance.
 - Not implemented yet:
   - the check runner and evidence collection;

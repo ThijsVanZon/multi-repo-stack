@@ -74,7 +74,7 @@ def _inspect(args) -> int:
         git.check(["init", "--quiet", "--bare", "--template=", str(store)])
         try:
             observed = state.observe(store, args.remote)
-        except state.Unknown as exc:
+        except (state.Unknown, git.GitError) as exc:
             _print({"kind": "UNKNOWN", "reason": str(exc)}, args.json, [f"state     UNKNOWN: {exc}"])
             return UNKNOWN
     finally:

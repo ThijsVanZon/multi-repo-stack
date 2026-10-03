@@ -120,6 +120,11 @@ class SelectionTests(GitTestCase):
         hidden = self.pstack_clone("hidden edit pstack")
         out("-C", hidden, "update-index", "--assume-unchanged", "pstack/README.md")
         (hidden / "pstack" / "README.md").write_bytes(b"hidden edit\n")
+        replaced = self.pstack_clone("replace-ref pstack")
+        edited = self.commit(replaced, {"pstack/README.md": "replacement content\n"}, "Replacement")
+        out("-C", replaced, "replace", PIN, edited)
+        out("-C", replaced, "-c", "advice.detachedHead=false", "checkout", "--quiet", "--detach", PIN)
+        self.assertEqual(out("-C", replaced, "rev-parse", "HEAD"), PIN)
         cases = {
             "missing": (self.tmp / "no such checkout", "is missing"),
             "installed copy": (installed, "not the root of a Git checkout"),
@@ -127,6 +132,7 @@ class SelectionTests(GitTestCase):
             "modified file": (dirty, "modified, untracked or ignored"),
             "untracked shadowing file": (shadow, "modified, untracked or ignored"),
             "edit hidden by assume-unchanged": (hidden, "content differs"),
+            "content substituted by a replace ref": (replaced, "modified, untracked or ignored"),
         }
         for label, (pstack, message) in cases.items():
             with self.subTest(label):

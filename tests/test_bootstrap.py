@@ -159,6 +159,56 @@ exit 1
         self.assertEqual(refs(target), {DEV: b})
         self.assertEqual(len((work / "attempts.log").read_text(encoding="utf-8").splitlines()), 1)
 
+    def test_ambient_destination_rewrites_are_refused_and_nothing_is_published(self):
+        """Local bootstrap: insteadOf/pushInsteadOf or a remote named like the destination would redirect the
+        push (paths with spaces included); preparation and application refuse, and the sink stays empty."""
+        source, b = self.lifecycle_source()
+        sink = self.bare("other sink with spaces.git", fixture=False)
+        target = self.bare("target.git")
+        for key in (f"url.{sink}.insteadOf", f"url.{sink}.pushInsteadOf", f"remote.{target}.pushurl"):
+            with self.subTest(key=key.split(".")[-1]):
+                value = str(target) if key.startswith("url.") else str(sink)
+                out("config", "--global", key, value)
+                with self.assertRaises(Refused) as caught:
+                    transactions.prepare_bootstrap(source=source, commit=b, remote=target,
+                                                   work=self.tmp / f"op {key.split('.')[-1]}")
+                self.assertEqual(caught.exception.code, "destination")
+                out("config", "--global", "--unset", key)
+        work = self.tmp / "op prepared before rewrite"
+        transactions.prepare_bootstrap(source=source, commit=b, remote=target, work=work)
+        out("config", "--global", f"url.{sink}.pushInsteadOf", str(target))
+        outcome = transactions.apply(work)
+        self.assertEqual((outcome.status, outcome.reason), ("REFUSED", "destination"))
+        self.assertEqual((refs(target), refs(sink)), ({}, {}))
+
+    def test_hidden_refs_make_absence_unobservable(self):
+        """Observation: with hideRefs configured, an advertisement cannot prove absence; result is UNKNOWN."""
+        target, source, b = self.bootstrapped()
+        empty = self.bare("empty target.git")
+        out("config", "--global", "uploadpack.hideRefs", "refs/")
+        for remote in (target, empty):
+            with self.subTest(remote=remote.name):
+                with self.assertRaises(state.Unknown):
+                    transactions.prepare_bootstrap(source=source, commit=b, remote=remote,
+                                                   work=self.tmp / f"op {remote.name}")
+        self.assertEqual(refs(empty), {})
+
+    def test_bootstrap_retry_in_unsupported_state_is_mixed_not_noop(self):
+        """Retry: B is on dev but the state is no longer a supported lifecycle state; no NOOP is reported."""
+        target = self.bare("target.git")
+        source, b = self.lifecycle_source()
+        work = self.bootstrap(target, source, b)
+        mvp = self.checkout("mvp")
+        mvp_commit = self.commit(mvp, {"index.html": "<p>mvp</p>\n"}, "MVP")
+        out("-C", mvp, "push", "--quiet", target, "HEAD:refs/heads/main")
+        outcome = transactions.apply(work)
+        self.assertEqual(outcome.status, "MIXED")
+        self.assertIn("main exists without any contract release", outcome.detail)
+        with self.assertRaises(Refused) as caught:
+            transactions.prepare_bootstrap(source=source, commit=b, remote=target, work=self.tmp / "op again")
+        self.assertEqual(caught.exception.code, "mixed")
+        self.assertEqual(refs(target), {DEV: b, "refs/heads/main": mvp_commit})
+
     def test_preparation_rejects_unusable_inputs(self):
         """Local bootstrap: non-fixture, relative or nested destinations and dirty work dirs are refused."""
         source, b = self.lifecycle_source()

@@ -52,11 +52,13 @@ def verify_checkout(path: Path, commit: str, subtree: str | None = None, what: s
         names.append(name.decode("utf-8"))
         expected.append(oid)
     if names:
-        hashed = git.check(["-C", str(path), "hash-object", "--stdin-paths"],
+        # Byte-exact: checkout filters (core.autocrlf, clean drivers) must not stand between the pin and the bytes.
+        hashed = git.check(["-C", str(path), "hash-object", "--no-filters", "--stdin-paths"],
                            input=("\n".join(names) + "\n").encode("utf-8")).out.split("\n")
         changed = [name for name, want, got in zip(names, expected, hashed) if want != got]
         if changed or len(hashed) != len(names):
-            raise SourceError(f"{what} {path} content differs from {commit}: {changed[:5]}")
+            raise SourceError(f"{what} {path} content differs byte-for-byte from {commit}: {changed[:5]} "
+                              "(clone with --config core.autocrlf=false if checkout filters converted it)")
     return git.check(["-C", str(path), "rev-parse", f"{commit}:{subtree}" if subtree else f"{commit}^{{tree}}"]).out
 
 

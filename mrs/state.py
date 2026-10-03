@@ -41,6 +41,10 @@ def encode_receipt(receipt: dict) -> bytes:
 
 def snapshot(store: Path, remote: str) -> dict[str, str]:
     """Complete ref listing of `remote` from one advertisement."""
+    if Path(remote).is_dir():
+        hidden = git.run(["-C", remote, "config", "--get-regexp", r"^(transfer|uploadpack|receive)\.hiderefs$"])
+        if hidden.ok and hidden.out:
+            raise Unknown(f"hidden refs are configured for {remote}; absence cannot be observed")
     result = git.run(["-C", str(store), "ls-remote", "--", remote])
     if not result.ok:
         raise Unknown(f"ls-remote failed (exit {result.returncode}): {result.err}")
@@ -65,10 +69,13 @@ def snapshot(store: Path, remote: str) -> dict[str, str]:
 
 def fetch(store: Path, remote: str, refs: dict[str, str]) -> None:
     """Bring dev/main/tag objects into `store` and confirm they match the snapshot."""
-    stale = git.check(["-C", str(store), "for-each-ref", "--format=%(refname)", OBSERVED]).out.splitlines()
-    if stale:
-        git.check(["-C", str(store), "update-ref", "--stdin"],
-                  input="".join(f"delete {ref}\n" for ref in stale).encode("utf-8"))
+    try:
+        stale = git.check(["-C", str(store), "for-each-ref", "--format=%(refname)", OBSERVED]).out.splitlines()
+        if stale:
+            git.check(["-C", str(store), "update-ref", "--stdin"],
+                      input="".join(f"delete {ref}\n" for ref in stale).encode("utf-8"))
+    except git.GitError as exc:
+        raise Unknown(f"observation store unusable: {exc}") from None
     wanted = [ref for ref in refs if ref in (DEV, MAIN) or ref.startswith("refs/tags/")]
     if not wanted:
         return
@@ -90,12 +97,18 @@ def ancestor(store: Path, older: str, newer: str) -> bool:
         raise Unknown(f"missing history: {exc}") from None
 
 
-def _exists(store: Path, oid: str, kind: str, what: str) -> None:
-    found = git.object_type(store, oid)
+def _exact_commit(store: Path, value, what: str) -> str:
+    """A full commit ID naming itself; names, abbreviations and other object types are malformed."""
+    if not isinstance(value, str) or not _OID.fullmatch(value):
+        raise Malformed(f"{what} must be a full object ID, got {value!r}")
+    found = git.object_type(store, value)
     if found is None:
-        raise Unknown(f"missing history: {what} {oid} is not available")
-    if found != kind:
-        raise Malformed(f"{what} {oid} is a {found}, not a {kind}")
+        raise Unknown(f"missing history: {what} {value} is not available")
+    resolved = git.run(["-C", str(store), "rev-parse", "--verify", "--quiet", "--end-of-options",
+                        f"{value}^{{commit}}"])
+    if found != "commit" or resolved.out != value:
+        raise Malformed(f"{what} {value} is not exactly a commit")
+    return value
 
 
 def next_line_violation(store: Path, candidate: str, next_commit: str, version: Version,
@@ -132,7 +145,6 @@ class Release:
     next_commit: str
     next_version: Version
     repository: str
-    receipt_bytes: bytes
 
 
 def _strict_json(data: bytes) -> dict:
@@ -170,17 +182,20 @@ def contract_release(store: Path, name: str, oid: str) -> Release:
     if len(data) > MAX_RECEIPT_BYTES:
         raise Malformed(f"tag {name}: receipt exceeds {MAX_RECEIPT_BYTES} bytes")
     receipt = _keys(_strict_json(data), RECEIPT_KEYS, f"tag {name}: receipt")
-    headers = dict(line.split(" ", 1) for line in head.decode("utf-8", "replace").split("\n") if " " in line)
+    lines = head.decode("utf-8", "replace").split("\n")
+    if [line.split(" ", 1)[0] for line in lines] != ["object", "type", "tag", "tagger"]:
+        raise Malformed(f"tag {name}: header must be exactly one object, type, tag and tagger line")
+    headers = dict(line.split(" ", 1) for line in lines)
     if receipt["format"] != RECEIPT_FORMAT:
         raise Malformed(f"tag {name}: unknown receipt format {receipt['format']!r}")
-    if receipt["version"] != name or headers.get("tag") != name:
+    if receipt["version"] != name or headers["tag"] != name:
         raise Malformed(f"tag {name}: tag name, tag header and receipt version disagree")
     try:
         version = versions.parse(name)
-        candidate = receipt["candidate"]
-        if not isinstance(candidate, str) or headers.get("object") != candidate or headers.get("type") != "commit":
+        candidate = _exact_commit(store, receipt["candidate"], f"tag {name}: candidate")
+        peeled = git.run(["-C", str(store), "rev-parse", "--verify", "--quiet", f"{oid}^{{commit}}"]).out
+        if headers["object"] != candidate or headers["type"] != "commit" or peeled != candidate:
             raise Malformed(f"tag {name}: must directly target the receipt's candidate commit")
-        _exists(store, candidate, "commit", "candidate")
         if versions.parse_file(git.read_file(store, candidate, "VERSION") or b"") != version:
             raise Malformed(f"tag {name}: candidate VERSION is not {name}")
         selection = config.at_commit(store, candidate)
@@ -192,13 +207,13 @@ def contract_release(store: Path, name: str, oid: str) -> Release:
         next_version = versions.parse(nxt["version"])
         if opened.isoformat() != nxt["opened"] or next_version != versions.next_line(version, opened):
             raise Malformed(f"tag {name}: next line {next_version} does not follow from {name} opened {opened}")
-        _exists(store, nxt["commit"], "commit", "next-line commit")
-        problem = next_line_violation(store, candidate, nxt["commit"], next_version, opened)
+        next_commit = _exact_commit(store, nxt["commit"], f"tag {name}: next-line commit")
+        problem = next_line_violation(store, candidate, next_commit, next_version, opened)
         if problem:
             raise Malformed(f"tag {name}: {problem}")
     except (versions.VersionError, config.ConfigError, ValueError, TypeError, git.GitError) as exc:
         raise Malformed(f"tag {name}: {exc}") from None
-    return Release(version, oid, candidate, nxt["commit"], next_version, receipt["repository"], data)
+    return Release(version, oid, candidate, next_commit, next_version, receipt["repository"])
 
 
 @dataclass
