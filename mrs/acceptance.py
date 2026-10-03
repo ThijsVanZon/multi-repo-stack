@@ -98,7 +98,7 @@ def _evidence_problem(evidence, required: bool) -> str | None:
 
 
 def _provenance(record) -> list[str]:
-    """Problems with the facts that every result of a record depends on. Without them no result counts."""
+    """Problems with the facts that every result of a record depends on; any one of them refuses the record."""
     problems = []
     observed, runner, pstack = record["observed"], record["runner"], record["pstack"]
     if (not isinstance(observed, dict) or set(observed) != {"ref", "at"} or observed["ref"] != _DEV
@@ -151,8 +151,7 @@ def _record(record, selection: config.Selection, facts: dict) -> tuple[list[str]
     for key in ("repository", "candidate", "version", "criteria", "shared", "pstack"):
         if key in facts and record[key] != facts[key]:
             problems.append(f"{key} is {record[key]!r}, but the assessed candidate has {facts[key]!r}")
-    provenance = _provenance(record)
-    problems += provenance
+    problems += _provenance(record)
     runner = record["runner"].get("os") if isinstance(record["runner"], dict) else None
     at = record["observed"].get("at") if isinstance(record["observed"], dict) else None
     if not isinstance(record["results"], list):
@@ -178,7 +177,7 @@ def _record(record, selection: config.Selection, facts: dict) -> tuple[list[str]
         elif problem := (_execution(result, at if _utc(at) else None)
                          or _evidence_problem(result["evidence"], check.evidence_required)):
             problems.append(f"{where}: {problem}")
-        elif not provenance:
+        else:
             passed.add((name, label))
     return problems, passed
 

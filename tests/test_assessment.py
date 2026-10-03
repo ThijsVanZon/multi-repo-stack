@@ -80,8 +80,8 @@ class AssessmentTests(ConsumerTestCase):
         """Collection versus acceptance: a record whose execution facts are absent or contradicted is REFUSED,
         never a passing pair: no executable, times or output identity, a start before C was observed, an
         unverified checkout, a runner reduced to its OS label, no dev observation, a boolean exit status, a pass
-        stating a failure reason, no pstack identity, or all execution facts at once. The real record is the
-        SUFFICIENT control."""
+        stating a failure reason, no pstack identity, times not written as collection writes them, a WSL runner
+        under another OS's label, or all execution facts at once. The real record is the SUFFICIENT control."""
         target, _, c = self.consumer("research", RESEARCH)
         _, _, record = self.collect(target, "research")
         verdict = self.verdict(record)
@@ -101,6 +101,10 @@ class AssessmentTests(ConsumerTestCase):
             "no executable": (result(executable=None), f"{pair}: the executable that ran is not identified"),
             "no execution times": (result(started=None, finished=None), untimed),
             "started before C was observed": (result(started="2000-01-01T00:00:00Z"), untimed),
+            "times not written as collection writes them": (
+                lambda r: r["results"][0].update({key: r["results"][0][key].lower()
+                                                  for key in ("started", "finished")}),
+                untimed),
             "no output identity": (result(output=None), f"{pair}: its output is not identified"),
             "unverified checkout": (
                 lambda r: r.update(checkout={"bytes": "not checked", "executable_bits": "not checked"}),
@@ -115,6 +119,10 @@ class AssessmentTests(ConsumerTestCase):
             "no pstack identity": (lambda r: r.update(pstack=None), "the pstack source is not identified"),
             "all execution facts removed": (stripped, f"{pair}: the executable that ran is not identified"),
         }
+        if NATIVE != "linux":  # WSL is linux: a WSL runner's record cannot carry this OS's label
+            cases[f"WSL runner under the {NATIVE} label"] = (
+                lambda r: r["runner"].update(wsl=True),
+                "the runner does not identify its actual OS, platform, Python and Git")
         for name, (change, problem) in cases.items():
             with self.subTest(name):
                 code, assessment = self.assess(target, [self.edited(record, name, change)], verdict, name=name)
