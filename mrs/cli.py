@@ -1,26 +1,17 @@
-"""Read-only commands. Slice 1 exposes no mutation command."""
+"""Read-only commands: preflight, inspect, collect and assess. There is no mutation command."""
 
 from __future__ import annotations
 
 import argparse
 import json
-import os
-import shutil
-import stat
 import sys
 import tempfile
 from pathlib import Path
 
-from . import git, sources, state
+from . import acceptance, collect, git, sources, state
 
-OK, REFUSED, UNKNOWN, INVALIDATED = 0, 3, 4, 5
-
-
-def _remove(path: str) -> None:
-    def retry(function, target, _info):
-        os.chmod(target, stat.S_IWRITE)
-        function(target)
-    shutil.rmtree(path, onerror=retry) if sys.version_info < (3, 12) else shutil.rmtree(path, onexc=retry)
+OK, NOT_PASSED, REFUSED, UNKNOWN, INVALIDATED = 0, 1, 3, 4, 5
+_remove = collect.remove_tree
 
 
 def _print(report: dict, as_json: bool, lines: list[str]) -> None:
@@ -114,10 +105,90 @@ def _inspect(args) -> int:
     return OK
 
 
+def _new_file(path: str) -> Path:
+    """Records and logs stay outside every Git checkout, so evidence never becomes residue in C's source."""
+    out = Path(path).resolve()
+    if out.exists() or not out.parent.is_dir() or git.run(["-C", str(out.parent), "rev-parse", "--git-dir"]).ok:
+        raise ValueError(f"{out} must be a new file in an existing folder outside any Git checkout")
+    return out
+
+
+def _collect(args) -> int:
+    try:
+        out = _new_file(args.out)
+        record, outputs, invalidated = collect.collect(args.repository, Path(args.pstack) if args.pstack else None)
+    except (ValueError, collect.Refused) as exc:
+        _print({"status": "REFUSED", "reason": str(exc)}, args.json, [f"COLLECTION REFUSED: {exc}"])
+        return REFUSED
+    except (state.Unknown, git.GitError) as exc:
+        _print({"status": "UNKNOWN", "reason": str(exc)}, args.json, [f"COLLECTION UNKNOWN: {exc}"])
+        return UNKNOWN
+    with open(out, "xb") as handle:
+        handle.write(json.dumps(record, indent=2, sort_keys=True).encode("ascii") + b"\n")
+    for pair, output in outputs.items():  # exact private output; the record holds its size and SHA-256
+        with open(out.with_name(f"{out.name}.{pair}.log"), "xb") as handle:
+            handle.write(output)
+    passed = all(result["outcome"] == "pass" for result in record["results"])
+    status = "INVALIDATED" if invalidated else "PASSED" if passed else "NOT PASSED"
+    runner, shared, pstack = record["runner"], record["shared"], record["pstack"]
+    _print({"status": status, "record_file": str(out), "record": record}, args.json, [
+        f"CHECKS {status}: check evidence for one commit only; acceptance also needs every required "
+        "check/environment pair and a non-author verdict",
+        f"candidate {record['candidate']}  version={record['version']}  repository={record['repository']}",
+        f"criteria  {record['criteria']}",
+        f"runner    {runner['os']}{' (WSL)' if runner['wsl'] else ''}  {runner['platform']}  Python {runner['python']}"
+        f"  {runner['git']}",
+        f"shared    {shared['repository']}  commit={shared['commit']}",
+        f"pstack    {pstack['repository']}  commit={pstack['commit']}  {pstack['path']} tree={pstack['tree']}",
+        *[f"result    {r['check']}/{r['environment']}  {r['outcome']}" + (f"  ({r['reason']})" if r["reason"] else "")
+          + (f"  {r['executable']['name']} sha256={r['executable']['sha256']}" if r["executable"] else "")
+          for r in record["results"]],
+        *[f"unmet     {u['check']}/{u['environment']} requires {u['os']}" for u in record["unmet"]],
+        f"record    {out}",
+    ])
+    return INVALIDATED if invalidated else OK if passed else NOT_PASSED
+
+
+def _assess(args) -> int:
+    try:
+        records = [Path(path).read_bytes() for path in args.record]
+        attestation = Path(args.attestation).read_bytes() if args.attestation else None
+        proposals = Path(args.reuse).read_bytes() if args.reuse else None
+    except OSError as exc:
+        _print({"status": "REFUSED", "reason": str(exc)}, args.json, [f"ASSESSMENT REFUSED: {exc}"])
+        return REFUSED
+    scratch = tempfile.mkdtemp(prefix="mrs-assess-")
+    try:
+        store = Path(scratch) / "observed.git"
+        git.check(["init", "--quiet", "--bare", "--template=", str(store)])
+        observed = state.observe(store, args.repository)
+        result = acceptance.assess(store, observed, observed.dev, records, attestation, proposals,
+                                   Path(args.pstack) if args.pstack else None)
+    except state.Redirected as exc:
+        _print({"status": "REFUSED", "reason": str(exc)}, args.json, [f"ASSESSMENT REFUSED: {exc}"])
+        return REFUSED
+    except (state.Unknown, git.GitError) as exc:
+        _print({"status": "UNKNOWN", "reason": str(exc)}, args.json, [f"ASSESSMENT UNKNOWN: {exc}"])
+        return UNKNOWN
+    finally:
+        _remove(scratch)
+    meaning = {acceptance.SUFFICIENT: "every required pair passed and a PASS non-author verdict binds exact C",
+               acceptance.INCOMPLETE: "not accepted; required evidence or the verdict is missing",
+               acceptance.REFUSED: "not accepted; the evidence or verdict does not hold for exact C"}
+    _print({"status": result.status, "candidate": result.candidate, "problems": result.problems,
+            "missing": result.missing, "acceptance": result.payload}, args.json, [
+        f"ASSESSMENT {result.status}: {meaning[result.status]}",
+        f"candidate {result.candidate}",
+        *[f"refused   {problem}" for problem in result.problems],
+        *[f"missing   {item}" for item in result.missing],
+    ])
+    return {acceptance.SUFFICIENT: OK, acceptance.INCOMPLETE: NOT_PASSED}.get(result.status, REFUSED)
+
+
 def main(argv: list[str] | None = None) -> int:
     for stream in (sys.stdout, sys.stderr):  # paths may be non-ASCII; never depend on the console code page
         stream.reconfigure(encoding="utf-8", errors="backslashreplace")
-    parser = argparse.ArgumentParser(prog="mrs", description="multi-repo-stack (Slice 1: read-only commands)")
+    parser = argparse.ArgumentParser(prog="mrs", description="multi-repo-stack (read-only commands)")
     commands = parser.add_subparsers(dest="command", required=True)
     pre = commands.add_parser("preflight", help="verify the consumer selection and selected shared/pstack checkouts")
     pre.add_argument("--consumer", default=".", help="consumer checkout root (default: current directory)")
@@ -129,5 +200,19 @@ def main(argv: list[str] | None = None) -> int:
     ins.add_argument("--remote", required=True, help="path or URL of the target repository (read-only)")
     ins.add_argument("--json", action="store_true")
     ins.set_defaults(handler=_inspect)
+    col = commands.add_parser("collect", help="run the declared checks of the observed dev's exact commit here")
+    col.add_argument("--repository", required=True, help="path or URL of the lifecycle repository (read-only)")
+    col.add_argument("--pstack", help="clean checkout of the pinned canonical pstack repository")
+    col.add_argument("--out", required=True, help="new record file, outside any Git checkout")
+    col.add_argument("--json", action="store_true")
+    col.set_defaults(handler=_collect)
+    ass = commands.add_parser("assess", help="assess check records and a non-author verdict for the observed dev")
+    ass.add_argument("--repository", required=True, help="path or URL of the lifecycle repository (read-only)")
+    ass.add_argument("--pstack", help="clean checkout of the pinned canonical pstack repository")
+    ass.add_argument("--record", action="append", default=[], help="a check record from collect (repeatable)")
+    ass.add_argument("--attestation", help="the separately commissioned non-author verdict on exact C")
+    ass.add_argument("--reuse", help="owner-proposed reused agent observations, each to be decided by the verdict")
+    ass.add_argument("--json", action="store_true")
+    ass.set_defaults(handler=_assess)
     args = parser.parse_args(argv)
     return args.handler(args)

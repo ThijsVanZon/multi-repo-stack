@@ -1,9 +1,10 @@
 """Guarded dev-only bootstrap and atomic main/tag/dev release, with read-only reconciliation.
 
-Slice 1 boundary: these functions mutate only disposable fixture destinations (an absolute
+Local fixture boundary: these functions mutate only disposable fixture destinations (an absolute
 path to a local bare repository containing FIXTURE_MARKER, which Git's configuration resolves to
 itself), and their transports may use only Git's file protocol. There is no command-line entry
-for them and no acceptance gate yet; the acceptance payload is recorded, not judged.
+for them. prepare_release records a fixture acceptance payload without judging it;
+prepare_accepted_release is the checked path, whose receipt carries a SUFFICIENT assessment of exact C.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
 
+from . import acceptance as acceptance_module
 from . import config, git, sources, state, versions
 from .state import DEV, MAIN
 
@@ -57,10 +59,10 @@ def _utc(now: datetime | None) -> datetime:
 def _destination(remote: str | Path) -> str:
     path = Path(remote)
     if not path.is_absolute():
-        raise Refused("destination", "Slice 1 transactions accept only an absolute path to a local bare repository")
+        raise Refused("destination", "transactions accept only an absolute path to a local bare repository")
     if not (path / FIXTURE_MARKER).is_file():
         raise Refused("destination", f"{path} is not marked as a disposable fixture ({FIXTURE_MARKER}); real "
-                                     "targets require the acceptance gate, which Slice 1 does not implement")
+                                     "targets need provider application, which is not implemented")
     probe = git.run(["-C", str(path), "rev-parse", "--is-bare-repository", "--absolute-git-dir"])
     lines = probe.out.splitlines() if probe.ok else []
     if len(lines) != 2 or lines[0] != "true" or not os.path.samefile(lines[1], path):
@@ -223,11 +225,31 @@ def _next_line_commit(store: Path, candidate: str, current: versions.Version, fo
 
 def prepare_release(*, remote: str | Path, work: Path, candidate: str, acceptance: dict, identity: Identity,
                     now: datetime | None = None) -> dict:
-    """Prepare the atomic promotion of exact integrated `candidate` (C) with receipt tag T and next line D."""
-    now = _utc(now)
-    env = _identity_env(identity, now)
+    """Prepare the atomic promotion of exact integrated `candidate` (C) with receipt tag T and next line D.
+    Low-level fixture path: `acceptance` is recorded, not judged, and cannot claim the assessed format;
+    prepare_accepted_release is the checked path."""
     if not isinstance(acceptance, dict) or set(acceptance) != {"criteria", "results", "verdict"}:
         raise Refused("acceptance", "acceptance must contain exactly criteria, results and verdict")
+    return _prepare_release(remote, work, candidate, lambda store, observed: acceptance, identity, now)
+
+
+def prepare_accepted_release(*, remote: str | Path, work: Path, candidate: str, records: list[bytes],
+                             attestation: bytes | None, proposals: bytes | None = None, pstack: Path | None,
+                             identity: Identity, now: datetime | None = None) -> dict:
+    """The checked path: the receipt carries only a SUFFICIENT assessment of exactly the observed dev C, made
+    from collected records and a non-author verdict by the sources C selects. Fixture-only, like the kernel."""
+    def assessed(store: Path, observed: state.State) -> dict:
+        result = acceptance_module.assess(store, observed, candidate, records, attestation, proposals, pstack)
+        if result.status != acceptance_module.SUFFICIENT:
+            raise Refused("acceptance", f"{result.status}: " + "; ".join(result.problems + result.missing))
+        return result.payload
+    return _prepare_release(remote, work, candidate, assessed, identity, now)
+
+
+def _prepare_release(remote: str | Path, work: Path, candidate: str, payload, identity: Identity,
+                     now: datetime | None) -> dict:
+    now = _utc(now)
+    env = _identity_env(identity, now)
     destination = _destination(remote)
     store = _new_store(Path(work))
     _resolves_to_itself(store, destination)
@@ -248,6 +270,7 @@ def prepare_release(*, remote: str | Path, work: Path, candidate: str, acceptanc
         following = versions.next_line(current, opened)
     except versions.VersionError as exc:
         raise Refused("version", str(exc)) from None
+    acceptance = payload(store, observed)
     next_commit = _next_line_commit(store, candidate, current, following, opened, env)
     receipt = state.encode_receipt({
         "format": state.RECEIPT_FORMAT, "repository": observed.repository, "version": str(current),

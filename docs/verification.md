@@ -1,9 +1,86 @@
 # Verification recipe (one recipe for every harness)
 
-Method: the pinned pstack `skills/principle-prove-it-works/SKILL.md` and `skills/principle-test-behavior-not-implementation/SKILL.md`. Read them from the pstack checkout that preflight verified.
+Method: read these from the pstack checkout that preflight verified:
 
-- **Prerequisites.** Python 3.11 or newer, and Git on PATH (Slice 1 exercised Git 2.37.3.windows.1; no minimum version is claimed). You also need a clean, byte-exact checkout of the pinned cursor/plugins commit (`git clone --config core.autocrlf=false`, then check out the pinned commit).
-- **Run.** From this directory, set `MRS_PSTACK_CHECKOUT` to that checkout, then run `python -I -B -m unittest discover -s tests -t . -v`. Without `MRS_PSTACK_CHECKOUT` the selection tests fail rather than skip.
-- **Evidence.** The unittest output. Each test docstring names the contract row it exercises, and every assertion reads refs and objects from real Git repositories.
-- **Fixtures.** Every test creates disposable repositories under the system temporary directory, with spaces and non-ASCII in their paths, and removes them afterwards. Set `MRS_KEEP_FIXTURES=1` to keep them. Tests enable ambient `push.followTags` and on-demand submodule pushing through a test-owned global Git configuration. Your own configuration is never touched. Every Git process a test starts, including child processes, may use only the file transport: the test-owned configuration sets `protocol.allow=never` with `protocol.file.allow=always`, and the test environment sets `GIT_ALLOW_PROTOCOL=file`. Adversarial redirections therefore stay among disposable local repositories.
-- **What a pass does not prove:** GitHub or provider behavior, operating systems other than the one that ran, agent integration, or real acceptance. Fixture receipts carry SIMULATED acceptance.
+- `skills/principle-prove-it-works/SKILL.md`;
+- `skills/principle-test-behavior-not-implementation/SKILL.md`;
+- the doctor, drive, evidence and cleanup structure of `skills/create-verification-skill/SKILL.md`.
+
+## Doctor
+
+You need:
+
+- Python 3.11 or newer, available as `python` on PATH;
+- Git on PATH;
+- a clean, byte-exact checkout of the pinned cursor/plugins commit. Clone it with `git clone --config core.autocrlf=false`, then check out the pinned commit.
+
+From this directory, `python -I -B mrs preflight --pstack <that checkout>` must print `PREFLIGHT OK`. No minimum Git version is claimed; this revision was exercised with Git 2.37.3.windows.1.
+
+## Suite
+
+From this directory, set `MRS_PSTACK_CHECKOUT` to the pstack checkout, then run:
+
+```text
+python -I -B tests
+```
+
+This is unittest discovery over `tests/`, and it is this project's declared `suite` check. Without `MRS_PSTACK_CHECKOUT`, the selection tests fail rather than skip.
+
+## This project's exact-commit record
+
+`collect` judges a repository's `dev`. To collect for the commit under test:
+
+1. Publish that commit to a task-owned disposable bare repository, using only the file transport.
+2. Run `collect` from a clean checkout of that same commit, with `MRS_PSTACK_CHECKOUT` set as above.
+
+```text
+git init --bare <scratch>/integration.git
+git -c protocol.allow=never -c protocol.file.allow=always push --no-follow-tags <scratch>/integration.git HEAD:refs/heads/dev
+python -I -B mrs collect --repository <scratch>/integration.git --pstack <pstack checkout> --out <folder outside any checkout>/suite.json
+python -I -B mrs assess --repository <scratch>/integration.git --pstack <pstack checkout> --record <folder>/suite.json
+```
+
+The record's evidence lists the tests run, failures, errors and skips. `assess` stays INCOMPLETE until both of these hold:
+
+- every OS that `multi-repo-stack.json` names has a passing record for the same commit;
+- a separately commissioned non-author verdict binds that exact commit.
+
+Remove the scratch repository afterwards. Keep the record and its private logs.
+
+## Evidence
+
+- The unittest output.
+- `collect` records and their logs.
+- `assess` reports.
+
+Each test's docstring names the contract row it exercises. Every assertion reads refs, objects, files and processes from real Git repositories.
+
+## Fixtures
+
+- Every test creates disposable repositories under the system temporary directory, with spaces and non-ASCII in their paths, and removes them afterwards. Set `MRS_KEEP_FIXTURES=1` to keep them.
+- Tests enable ambient `push.followTags` and on-demand submodule pushing through a test-owned global Git configuration. Your own configuration is never touched.
+- Every Git process a test starts, including child processes, may use only the file transport. The test-owned configuration sets `protocol.allow=never` with `protocol.file.allow=always`, and the test environment sets `GIT_ALLOW_PROTOCOL=file`. Adversarial redirections therefore stay among disposable local repositories.
+- The acceptance tests build three tiny consumers from `tests/consumers`:
+  - an implementation shape that builds and runs a program;
+  - a research shape that checks a synthetic result;
+  - a probe shape for the collection boundaries.
+- Their verdicts are SIMULATED attestations written by test code.
+
+## First-release gates this project keeps open
+
+- **Runtime:** a passing `suite` record from native Windows, Linux and macOS for the same exact commit. Read-only GitHub Actions CI is the intended route.
+- **Agent integration:** fresh `AGENTS.md` entry in each of these:
+  - Claude Code on native Windows;
+  - Claude Code on native macOS;
+  - Codex in the Linux/cloud environment.
+- **Provider:** behavior established through separately authorized tests.
+- **Independent verification:** a non-author verdict on the integrated release candidate.
+
+`assess` enforces the runtime pairs and the verdict. Agent and provider evidence reach acceptance only through that verdict, which must accept or reject each reused observation.
+
+## What a pass does not prove
+
+- GitHub or provider behavior.
+- Operating systems other than the one that ran.
+- Agent integration.
+- Real acceptance. Fixture receipts and verdicts are SIMULATED.

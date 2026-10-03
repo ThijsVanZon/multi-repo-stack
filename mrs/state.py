@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 
-from . import config, git, versions
+from . import acceptance, config, git, versions
 from .versions import Version
 
 MARKER = b"multi-repo-stack release receipt v1"
@@ -245,7 +245,13 @@ def contract_release(store: Path, name: str, oid: str) -> Release:
         selection = config.at_commit(store, candidate)
         if selection.applicability != "lifecycle" or selection.repository != receipt["repository"]:
             raise Malformed(f"tag {name}: receipt repository/applicability do not match the candidate's selector")
-        _keys(receipt["acceptance"], {"criteria", "results", "verdict"}, f"tag {name}: acceptance")
+        if isinstance(receipt["acceptance"], dict) and "format" in receipt["acceptance"]:
+            # The checked path's assessed acceptance must still hold for exactly this C, N and repository.
+            problems = acceptance.payload_problems(store, candidate, name, receipt["repository"], receipt["acceptance"])
+            if problems:
+                raise Malformed(f"tag {name}: assessed acceptance does not hold: {'; '.join(problems[:3])}")
+        else:  # the kernel's unchecked fixture payload: recorded, not judged
+            _keys(receipt["acceptance"], {"criteria", "results", "verdict"}, f"tag {name}: acceptance")
         nxt = _keys(receipt["next"], {"commit", "version", "opened"}, f"tag {name}: next")
         opened = date.fromisoformat(nxt["opened"])
         next_version = versions.parse(nxt["version"])

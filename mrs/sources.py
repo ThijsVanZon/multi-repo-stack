@@ -90,13 +90,30 @@ def preflight(consumer: Path, pstack: Path | None) -> dict:
     pending = git.run(["-C", str(consumer), "--no-optional-locks", "status", "--porcelain", "--", config.FILENAME])
     if not pending.ok or pending.stdout:
         raise SourceError(f"{config.FILENAME} differs from the committed selection; the selector is ambiguous")
+    if selection.shared is None and not os.path.samefile(consumer, TOOL_ROOT):
+        raise SourceError("this selector belongs to the shared project itself; run the tool from that checkout")
+    shared, pstack_identity = selected(selection, head.out, pstack)
+    docs = CONTEXT_DOCS + (LIFECYCLE_DOCS if selection.applicability == "lifecycle" else ())
+    return {
+        "consumer": {"repository": selection.repository, "applicability": selection.applicability,
+                     "commit": head.out},
+        "shared": shared,
+        "pstack": pstack_identity,
+        "load": [str(TOOL_ROOT / doc) for doc in docs],
+        "runtime": {"git": git.version(), "git_executable": git.executable(), "python": platform.python_version(),
+                    "python_executable": sys.executable, "os": platform.platform()},
+    }
+
+
+def selected(selection: config.Selection, commit: str, pstack: Path | None) -> tuple[dict, dict]:
+    """Verify the shared tool and pstack checkouts that `selection`, read at consumer `commit`, selects: the
+    running tool must be that exact clean shared commit (the shared project's own selector selects `commit`
+    itself), and `pstack` a clean byte-exact checkout of the pin that the shared revision records."""
+    shared = shared_identity(selection, commit)
     if selection.shared is None:
-        if not os.path.samefile(consumer, TOOL_ROOT):
-            raise SourceError("this selector belongs to the shared project itself; run the tool from that checkout")
         # Editing this checkout is ordinary work, but a verified run executes only clean committed source;
         # its commit is recorded in the output (externally), never pinned inside the source itself.
-        verify_checkout(TOOL_ROOT, head.out, what="shared checkout (this checkout, running tool)")
-        shared = {"repository": selection.repository, "commit": head.out, "self": True, "clean": True}
+        verify_checkout(TOOL_ROOT, commit, what="shared checkout (this checkout, running tool)")
         shared_selection = selection
     else:
         verify_checkout(TOOL_ROOT, selection.shared.commit, what="shared checkout (running tool)")
@@ -104,20 +121,17 @@ def preflight(consumer: Path, pstack: Path | None) -> dict:
         if shared_selection.pstack is None or shared_selection.repository != selection.shared.repository:
             raise SourceError(f"commit {selection.shared.commit} is not the {selection.shared.repository} "
                               "shared source")
-        shared = {"repository": selection.shared.repository, "commit": selection.shared.commit, "self": False,
-                  "clean": True}
     pin = shared_selection.pstack
     if pstack is None:
         raise SourceError(f"supply --pstack: a clean checkout of {pin.repository} at {pin.commit}; installed "
                           "or floating copies are not accepted")
     tree = verify_checkout(Path(pstack).resolve(), pin.commit, pin.path, what="pstack checkout")
-    docs = CONTEXT_DOCS + (LIFECYCLE_DOCS if selection.applicability == "lifecycle" else ())
-    return {
-        "consumer": {"repository": selection.repository, "applicability": selection.applicability,
-                     "commit": head.out},
-        "shared": shared,
-        "pstack": {"repository": pin.repository, "commit": pin.commit, "path": pin.path, "tree": tree},
-        "load": [str(TOOL_ROOT / doc) for doc in docs],
-        "runtime": {"git": git.version(), "git_executable": git.executable(), "python": platform.python_version(),
-                    "python_executable": sys.executable, "os": platform.platform()},
-    }
+    return shared, {"repository": pin.repository, "commit": pin.commit, "path": pin.path, "tree": tree}
+
+
+def shared_identity(selection: config.Selection, commit: str) -> dict:
+    """The shared source that `selection`, read at consumer `commit`, selects (verified by `selected`)."""
+    if selection.shared is None:
+        return {"repository": selection.repository, "commit": commit, "self": True, "clean": True}
+    return {"repository": selection.shared.repository, "commit": selection.shared.commit, "self": False,
+            "clean": True}

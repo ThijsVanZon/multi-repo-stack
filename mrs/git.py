@@ -12,7 +12,7 @@ from pathlib import Path
 # Variables that would silently redirect commands to another repository or index, inject the
 # command-line configuration of a parent Git process (e.g. when run from a hook), make `git config`
 # read other configuration than every other command (GIT_CONFIG), or rewrite ancestry (grafts).
-_SCRUBBED_ENV = (
+SCRUBBED_ENV = (
     "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
     "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR", "GIT_NAMESPACE",
     "GIT_QUARANTINE_PATH", "GIT_PREFIX", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG", "GIT_GRAFT_FILE",
@@ -54,7 +54,7 @@ class Result:
 
 def run(args: list[str], *, cwd: Path | str | None = None, input: bytes | None = None,
         env: dict[str, str] | None = None) -> Result:
-    full_env = {k: v for k, v in os.environ.items() if k not in _SCRUBBED_ENV}
+    full_env = {k: v for k, v in os.environ.items() if k not in SCRUBBED_ENV}
     # Replace refs would let a commit ID stand for different content; lifecycle facts use real objects.
     full_env.update({"LC_ALL": "C", "LANGUAGE": "C", "GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "never",
                      "GIT_NO_REPLACE_OBJECTS": "1"})
