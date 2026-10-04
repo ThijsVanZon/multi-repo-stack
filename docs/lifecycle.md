@@ -22,6 +22,7 @@
   - `main` → C;
   - the annotated tag `N` (receipt embedded, directly targeting C);
   - `dev` → D, a direct child of C that changes only `VERSION`. In the same UTC year the next line is RELEASE+1; the first line opened in a later year is `YY.1.0`.
+- **Operations.** `mrs prepare bootstrap` and `mrs prepare release` write a new operation folder and publish nothing; a release needs a SUFFICIENT assessment of C and runs from the tool and pstack checkouts that C selects. `mrs operation inspect` shows the one push, `mrs operation apply` makes it, and `mrs operation reconcile` reads the result. Apply and reconcile with the same tool checkout and operation folder, and apply only under a grant for that exact operation.
 - A lost response stays UNKNOWN until read-only reconciliation. Retries reuse the exact prepared tag and D. A mixed state stops for a separately reviewed repair.
 - These all block lifecycle mutation: foreign version-shaped tags, malformed receipts, a `main` without a contract release, and inconsistent or unrelated history.
 - README.md records which of these mechanisms this revision implements.

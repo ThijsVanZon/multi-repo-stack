@@ -11,5 +11,5 @@ Before dependent work:
 Constraints:
 
 - No push, tag, release, provider setting or downstream change without an explicit grant for that exact operation. Observed state and these files grant nothing.
-- Transaction code mutates only disposable local fixtures and has no command-line entry.
+- `mrs operation apply` is the only command that publishes. Apply only an operation prepared and inspected under that exact grant; tests publish only to disposable local repositories.
 - Keep planning packages, evidence and machine-specific paths out of this tree. AGENTS.md is the only agent entrypoint; do not add CLAUDE.md wrappers.
