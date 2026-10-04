@@ -299,20 +299,28 @@ exit 1
         self.assertEqual(refs(target), {DEV: b, "refs/heads/main": mvp_commit})
 
     def test_preparation_rejects_unusable_inputs(self):
-        """Local bootstrap: non-fixture, relative or nested destinations and dirty work dirs are refused."""
+        """Local bootstrap: ambiguous destinations and work dirs inside user work are refused; a real target
+        (unmarked, or a URL) through the library from a tool that is not the clean shared commit B selects is
+        refused before any scratch exists or anything is contacted."""
         source, b = self.lifecycle_source()
         unmarked = self.bare("unmarked.git", fixture=False)
         cases = {
-            "unmarked real-looking target": dict(remote=unmarked, work=self.tmp / "op1"),
-            "relative destination": dict(remote="target.git", work=self.tmp / "op2"),
-            "url destination": dict(remote="https://example.invalid/owner/repo.git", work=self.tmp / "op3"),
-            "work inside caller checkout": dict(remote=self.bare("t.git"), work=source / "op"),
+            "unmarked real target, unselected tool": (dict(remote=unmarked, work=self.tmp / "op1"), "source"),
+            "relative destination": (dict(remote="target.git", work=self.tmp / "op2"), "destination"),
+            "remote name": (dict(remote="origin", work=self.tmp / "op2"), "destination"),
+            "scp-like address": (dict(remote="git@example.invalid:owner/repo.git", work=self.tmp / "op2"),
+                                 "destination"),
+            "url with a password": (dict(remote="https://user:secret@example.invalid/o/r.git", work=self.tmp / "op2"),
+                                    "destination"),
+            "url real target, unselected tool": (dict(remote="https://example.invalid/owner/repo.git",
+                                                      work=self.tmp / "op3"), "source"),
+            "work inside caller checkout": (dict(remote=self.bare("t.git"), work=source / "op"), "work"),
         }
-        for label, kwargs in cases.items():
+        for label, (kwargs, code) in cases.items():
             with self.subTest(label):
                 with self.assertRaises(Refused) as caught:
                     transactions.prepare_bootstrap(source=source, commit=b, **kwargs)
-                self.assertIn(caught.exception.code, ("destination", "work"))
+                self.assertEqual(caught.exception.code, code, caught.exception)
         self.assertEqual(refs(unmarked), {})
         self.assertFalse((source / "op").exists())
         with self.assertRaises(Refused) as caught:

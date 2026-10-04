@@ -84,6 +84,7 @@ class OperationRecordTests(GitTestCase):
             "tag lease not absent": lambda op: op["expected"].update({TAG: t}),
             "dev lease is B, not C": lambda op: op["expected"].update({DEV: b}),
             "main lease is not an ancestor of C": lambda op: op["expected"].update({MAIN: d}),
+            "absent main lease names ancestor B": lambda op: op["expected"].update({MAIN: b}),
             "main lease is an abbreviation": lambda op: op["expected"].update({MAIN: b[:12]}),
             "expected is a list": lambda op: op.update(expected=[]),
             "tag names C": lambda op: op.update(tag=c),

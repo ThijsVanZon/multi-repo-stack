@@ -54,9 +54,7 @@ class CheckedReleaseTests(ConsumerTestCase):
         operation = self.checked_prepare(target, "release op", c, [record], verdict)
         work = self.tmp / "release op"
         saved = (work / "operation.json").read_bytes()
-        outcome = transactions.apply(work, now=NOW)
-
-        self.assertEqual(outcome.status, "APPLIED", outcome)
+        self.assertEqual(self.checked("apply", work), "APPLIED")
         tag, d = operation["tag"], operation["next"]["commit"]
         self.assertEqual(refs(target), {MAIN: c, TAG: tag, DEV: d})
         clone = self.tmp / "verifier clone.git"
@@ -72,8 +70,8 @@ class CheckedReleaseTests(ConsumerTestCase):
         self.assertEqual((code, inspected["kind"], inspected["problems"]), (0, "LIFECYCLE", []))
         self.assertEqual([release["tag"] for release in inspected["releases"]], [tag])
 
-        self.assertEqual(transactions.reconcile(work).status, "COMPLETED")
-        self.assertEqual(transactions.apply(work, now=NOW).status, "NOOP")
+        self.assertEqual(self.checked("reconcile", work), "COMPLETED")
+        self.assertEqual(self.checked("apply", work), "NOOP")
         self.assertEqual(refs(target), {MAIN: c, TAG: tag, DEV: d})
         self.assertEqual((work / "operation.json").read_bytes(), saved)
 
@@ -105,7 +103,7 @@ class CheckedReleaseTests(ConsumerTestCase):
         self.assertEqual(refs(target), {DEV: c})
 
         operation = self.checked_prepare(target, "control op", c, [record], self.verdict(record))
-        self.assertEqual(transactions.apply(self.tmp / "control op", now=NOW).status, "APPLIED")
+        self.assertEqual(self.checked("apply", self.tmp / "control op"), "APPLIED")
         self.assertEqual(refs(target), {MAIN: c, TAG: operation["tag"], DEV: operation["next"]["commit"]})
 
     def test_receipt_over_the_frozen_limit_is_refused_before_anything_is_published(self):
@@ -132,7 +130,7 @@ class CheckedReleaseTests(ConsumerTestCase):
         target, _, b = self.consumer("implementation", IMPLEMENTATION)
         _, _, first = self.collect(target, "first")
         operation = self.checked_prepare(target, "first op", b, [first], self.verdict(first))
-        self.assertEqual(transactions.apply(self.tmp / "first op", now=NOW).status, "APPLIED")
+        self.assertEqual(self.checked("apply", self.tmp / "first op"), "APPLIED")
         selector = json.loads(out("-C", target, "show", f"{refs(target)[DEV]}:multi-repo-stack.json"))
         selector["checks"]["build-and-run"]["evidence_required"] = False
         c2 = self.integrate(target, {"multi-repo-stack.json": json.dumps(selector, indent=2) + "\n"},
@@ -151,7 +149,7 @@ class CheckedReleaseTests(ConsumerTestCase):
         code, assessment = self.assess(target, [second], explained, name="explained")
         self.assertEqual((code, assessment["acceptance"]["criteria"]), (0, {"identity": current, "previous": previous}))
         later = self.checked_prepare(target, "second op", c2, [second], explained)
-        self.assertEqual(transactions.apply(self.tmp / "second op", now=NOW).status, "APPLIED")
+        self.assertEqual(self.checked("apply", self.tmp / "second op"), "APPLIED")
         self.assertEqual(refs(target), {MAIN: c2, TAG: operation["tag"], "refs/tags/26.2.0": later["tag"],
                                         DEV: later["next"]["commit"]})
 

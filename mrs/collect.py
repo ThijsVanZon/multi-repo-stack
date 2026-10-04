@@ -185,7 +185,7 @@ def _materialize(checkout: Path, store: Path, commit: str) -> None:
     (checkout / ".git" / "info").mkdir()
     (checkout / ".git" / "info" / "attributes").write_text(_EXACT, encoding="ascii")
     git.check(["-C", str(checkout), "fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "--", str(store),
-               f"{commit}:refs/mrs/candidate"], env=git.local_only(store))
+               f"{commit}:refs/mrs/candidate"], env=git.transport_only(store))
     git.check(["-C", str(checkout), "-c", "advice.detachedHead=false", "checkout", "--quiet", "--detach", commit])
 
 

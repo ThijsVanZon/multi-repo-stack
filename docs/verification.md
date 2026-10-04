@@ -49,7 +49,7 @@ Remove the scratch repository afterwards. Keep the record and its private logs.
 
 The scratch repository's `dev` is a local mapping of the commit under test, made only to drive `collect`. The record is evidence about that exact commit. It does not show that the commit was ever the real target's `dev`, and it carries no acceptance.
 
-## Hosted CI (prepared, not yet run)
+## Hosted CI
 
 `.github/workflows/checks.yml` has read-only permissions. It never pushes, tags, comments, merges, changes settings or states a verdict. It pins its actions by commit and reads the pstack pin from `multi-repo-stack.json`. Each matrix row is one native OS (Linux, Windows, macOS) on Python 3.11, the declared minimum, and runs the full suite once.
 
@@ -76,10 +76,11 @@ Each test's docstring names the contract row it exercises. Every assertion reads
   - a research shape that checks a synthetic result;
   - a probe shape for the collection boundaries.
 - Their verdicts are SIMULATED attestations written by test code.
+- Low-level transaction tests use bare repositories marked as disposable fixtures. The production tests (`tests/test_production.py`) use unmarked bare repositories and `file://` URLs as real targets, through the public `prepare` and `operation` commands, and through direct library calls, run from a clean checkout of the source under test.
 
 ## First-release gates this project keeps open
 
-- **Runtime:** a passing `suite` record from native Windows, Linux and macOS for the same exact commit. The read-only workflow above is the intended route, once it is activated.
+- **Runtime:** a passing `suite` record from native Windows, Linux and macOS for the same exact commit. The read-only workflow above is the intended route.
 - **Agent integration:** fresh `AGENTS.md` entry in each of these:
   - Claude Code on native Windows;
   - Claude Code on native macOS;

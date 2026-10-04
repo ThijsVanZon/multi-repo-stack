@@ -1,18 +1,21 @@
-"""Commands: preflight, inspect, collect, assess and task. They are read-only toward every target. The only write
-is `task create`, which adds one new branch to the caller's local checkout. There is no publication command."""
+"""Commands: preflight, inspect, collect, assess, task, prepare and operation. Only `operation apply` publishes:
+it applies one prepared bootstrap or release to its target. `prepare` writes only a new operation folder, `task
+create` adds one new branch to the caller's local checkout, and everything else is read-only toward targets."""
 
 from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import tempfile
 from pathlib import Path
 
-from . import acceptance, collect, git, sources, state, tasks
+from . import acceptance, collect, git, sources, state, tasks, transactions
 
-OK, NOT_PASSED, REFUSED, UNKNOWN, INVALIDATED = 0, 1, 3, 4, 5
+OK, NOT_PASSED, REFUSED, UNKNOWN, INVALIDATED, MIXED = 0, 1, 3, 4, 5, 6
 _remove = collect.remove_tree
+_IDENTITY = re.compile(r"(?P<name>[^<>\n]*[^<>\s])\s*<(?P<email>[^<>\s]+)>")
 
 
 def _print(report: dict, as_json: bool, lines: list[str]) -> None:
@@ -218,10 +221,88 @@ def _task(args) -> int:
     return OK if report["status"] == "VALID" else NOT_PASSED
 
 
+def _describe(operation: dict, work: Path) -> list[str]:
+    store = work / transactions.STORE
+    lines = [f"kind      {operation['kind']} of {operation['repository']} ({operation['version']})",
+             f"target    {operation['remote']}"]
+    lines += [f"update    {ref}  {old or '(absent)'} -> {operation['updates'][ref]}"
+              for ref, old in operation["expected"].items()]
+    if operation["kind"] == "release":
+        lines += [f"next      {operation['next']['version']} opened {operation['next']['opened']} (UTC)",
+                  f"receipt   sha256={operation['receipt_sha256']}  acceptance sha256={operation['acceptance_sha256']}"]
+    else:
+        lines.append("assumes   you are the sole initializer: a lease on dev cannot guard every other ref")
+    tool = operation["tool"]
+    lines += [f"tool      commit={tool['commit']}  clean={tool['clean']}",
+              "push      git -C " + " ".join(json.dumps(arg) if " " in arg else arg
+                                             for arg in [str(store), *transactions.push_command(operation)])]
+    return lines
+
+
+def _work(path: str) -> Path:
+    return Path(path).resolve()
+
+
+def _prepare(args) -> int:
+    work = _work(args.work)
+    try:
+        if args.prepare_command == "bootstrap":
+            operation = transactions.prepare_bootstrap(
+                source=Path(args.source).resolve(), commit=args.commit, remote=args.repository, work=work,
+                pstack=Path(args.pstack) if args.pstack else None)
+        else:
+            match = _IDENTITY.fullmatch(args.identity)
+            if not match:
+                raise transactions.Refused("identity", f"--identity must be 'Name <email>', got {args.identity!r}")
+            operation = transactions.prepare_accepted_release(
+                remote=args.repository, work=work, candidate=args.candidate,
+                records=[Path(path).read_bytes() for path in args.record],
+                attestation=Path(args.attestation).read_bytes() if args.attestation else None,
+                proposals=Path(args.reuse).read_bytes() if args.reuse else None,
+                pstack=Path(args.pstack) if args.pstack else None,
+                identity=transactions.Identity(match["name"], match["email"]))
+    except (transactions.Refused, state.Redirected, OSError) as exc:
+        reason = f"{exc.code}: {exc.detail}" if isinstance(exc, transactions.Refused) else str(exc)
+        _print({"status": "REFUSED", "reason": reason}, args.json, [f"PREPARATION REFUSED: {reason}"])
+        return REFUSED
+    except (state.Unknown, git.GitError) as exc:
+        _print({"status": "UNKNOWN", "reason": str(exc)}, args.json, [f"PREPARATION UNKNOWN: {exc}"])
+        return UNKNOWN
+    _print({"status": "PREPARED", "work": str(work), "operation": operation}, args.json, [
+        f"PREPARED: nothing was published. Review it with `mrs operation inspect --work {work}`; only "
+        f"`mrs operation apply --work {work}` publishes it.", *_describe(operation, work)])
+    return OK
+
+
+def _operation(args) -> int:
+    work = _work(args.work)
+    if args.operation_command == "apply":
+        outcome = transactions.apply(work)
+        code = {"APPLIED": OK, "NOOP": OK, "REFUSED": REFUSED, "UNKNOWN": UNKNOWN, "MIXED": MIXED}[outcome.status]
+    else:
+        try:
+            operation = transactions.load(work)
+            if args.operation_command == "inspect":
+                _print({"status": "VALID", "work": str(work), "operation": operation,
+                        "push": ["git", "-C", str(work / transactions.STORE), *transactions.push_command(operation)]},
+                       args.json, ["OPERATION VALID: prepared, saved and bound as shown; not observed or applied",
+                                   *_describe(operation, work)])
+                return OK
+            outcome = transactions.reconcile(work)
+        except transactions.Refused as exc:
+            outcome = transactions.Outcome("REFUSED", exc.code, exc.detail)
+        code = {"COMPLETED": OK, "NOT_APPLIED": NOT_PASSED, "DIVERGED": REFUSED, "REFUSED": REFUSED,
+                "UNKNOWN": UNKNOWN, "MIXED": MIXED}[outcome.status]
+    _print({"status": outcome.status, "reason": outcome.reason, "detail": outcome.detail, "refs": outcome.refs},
+           args.json, [f"{args.operation_command.upper()} {outcome.status} ({outcome.reason}): {outcome.detail}",
+                       *[f"ref       {ref} {oid}" for ref, oid in sorted((outcome.refs or {}).items())]])
+    return code
+
+
 def main(argv: list[str] | None = None) -> int:
     for stream in (sys.stdout, sys.stderr):  # paths may be non-ASCII; never depend on the console code page
         stream.reconfigure(encoding="utf-8", errors="backslashreplace")
-    parser = argparse.ArgumentParser(prog="mrs", description="multi-repo-stack (no command publishes anything)")
+    parser = argparse.ArgumentParser(prog="mrs", description="multi-repo-stack (only `operation apply` publishes)")
     commands = parser.add_subparsers(dest="command", required=True)
     pre = commands.add_parser("preflight", help="verify the consumer selection and selected shared/pstack checkouts")
     pre.add_argument("--consumer", default=".", help="consumer checkout root (default: current directory)")
@@ -263,5 +344,33 @@ def main(argv: list[str] | None = None) -> int:
     chk.add_argument("--base", default="dev", help="dev, or the same-line parent task branch of a stacked task")
     chk.add_argument("--json", action="store_true")
     task.set_defaults(handler=_task)
+    prepare = commands.add_parser("prepare", help="prepare a bootstrap or release in a new operation folder; "
+                                                  "publishes nothing")
+    prepare_commands = prepare.add_subparsers(dest="prepare_command", required=True)
+    boot = prepare_commands.add_parser("bootstrap", help="create dev at exact B on an empty target")
+    boot.add_argument("--repository", required=True, help="the empty target: absolute local path or https/ssh/file URL")
+    boot.add_argument("--source", required=True, help="local repository holding B")
+    boot.add_argument("--commit", required=True, help="B, the full commit ID that dev will point to")
+    rel = prepare_commands.add_parser("release", help="promote the observed dev C with a SUFFICIENT assessment")
+    rel.add_argument("--repository", required=True, help="the target: absolute local path or https/ssh/file URL")
+    rel.add_argument("--candidate", required=True, help="C, the full commit ID of the target's dev to release")
+    rel.add_argument("--record", action="append", default=[], help="a check record from collect (repeatable)")
+    rel.add_argument("--attestation", help="the separately commissioned non-author verdict on exact C")
+    rel.add_argument("--reuse", help="owner-proposed reused agent observations, each to be decided by the verdict")
+    rel.add_argument("--identity", required=True, help="tagger and next-line author, 'Name <email>'")
+    for sub in (boot, rel):
+        sub.add_argument("--pstack", help="clean checkout of the pinned canonical pstack repository")
+        sub.add_argument("--work", required=True, help="new operation folder, outside any Git checkout")
+        sub.add_argument("--json", action="store_true")
+    prepare.set_defaults(handler=_prepare)
+    operation = commands.add_parser("operation", help="inspect, apply or reconcile a prepared operation")
+    operation_commands = operation.add_subparsers(dest="operation_command", required=True)
+    for name, text in (("inspect", "validate the saved operation and show what apply would push; read-only"),
+                       ("apply", "publish the prepared operation: one guarded push, no retry"),
+                       ("reconcile", "compare the target with the prepared operation; read-only")):
+        sub = operation_commands.add_parser(name, help=text)
+        sub.add_argument("--work", required=True, help="the operation folder that prepare wrote")
+        sub.add_argument("--json", action="store_true")
+    operation.set_defaults(handler=_operation)
     args = parser.parse_args(argv)
     return args.handler(args)
