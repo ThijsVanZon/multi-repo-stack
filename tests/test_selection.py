@@ -247,17 +247,20 @@ class SelectionTests(GitTestCase):
                 self.assertEqual((code, report["verdict"]), (5, "INVALIDATED"))
                 self.assertIn(str(record), report["reason"])
 
-    def test_cli_is_read_only_and_reports_unknown_separately(self):
-        """Entry and scope / Observation: no bootstrap, release or publication command exists (such a verb is a
-        usage error with no effect on the target or the checkout; only `task create` writes, and only to a local
-        checkout); an unreadable target is UNKNOWN."""
+    def test_only_a_prepared_operation_publishes_and_unknown_is_reported_separately(self):
+        """Entry and scope / Observation: there is no direct bootstrap, release, apply or push verb (each is a usage
+        error with no effect on the target or the checkout); publication happens only through `operation apply`
+        of a prepared operation, and preparation alone publishes nothing. An unreadable target is UNKNOWN."""
         checkout, _ = shared_snapshot()
-        empty = self.bare("empty target.git")
+        empty = self.bare("empty target.git", fixture=False)
         source, b = self.lifecycle_source(name="cli source")
         for verb in ("bootstrap", "release", "apply", "push"):
             with self.subTest(verb):
                 code, text = run_tool(checkout, verb, "--remote", empty, "--source", source, "--commit", b)
                 self.assertEqual(code, 2, text)
+        code, text = run_tool(checkout, "prepare", "bootstrap", "--repository", empty, "--source", source, "--commit",
+                              b, "--pstack", self.pstack(), "--work", self.tmp / "op", "--json")
+        self.assertEqual((code, json.loads(text)["status"]), (0, "PREPARED"))
         self.assertEqual(refs(empty), {})
         self.assertEqual(out("-C", checkout, "status", "--porcelain", "--untracked-files=all", "--ignored"), "")
         code, text = run_tool(checkout, "inspect", "--remote", self.tmp / "no such target", "--json")

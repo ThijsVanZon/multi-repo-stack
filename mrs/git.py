@@ -6,6 +6,7 @@ import functools
 import os
 import shutil
 import subprocess
+import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -64,10 +65,19 @@ def run(args: list[str], *, cwd: Path | str | None = None, input: bytes | None =
     return Result(proc.returncode, proc.stdout, proc.stderr)
 
 
-def local_only(location: str | Path) -> dict[str, str] | None:
-    """Environment for a transport to a local repository path: Git itself, and every Git process it
-    starts, then refuses any transport but file, so a rewritten location fails before any connection."""
-    return {"GIT_ALLOW_PROTOCOL": "file"} if Path(location).is_absolute() else None
+def scheme(location: str | Path) -> str | None:
+    """The URL scheme of a repository location, or None for a local path (a drive letter is not a scheme)."""
+    found = urllib.parse.urlsplit(str(location)).scheme
+    return found.lower() if len(found) > 1 else None
+
+
+def transport_only(location: str | Path) -> dict[str, str]:
+    """Environment for a transport to `location`: Git itself, and every Git process it starts, may then use only
+    that location's own transport (file for a local path), and never one the caller's environment already
+    forbids, so a rewritten location fails before any connection."""
+    own = scheme(location) or "file"
+    ambient = os.environ.get("GIT_ALLOW_PROTOCOL")
+    return {"GIT_ALLOW_PROTOCOL": own if ambient is None or own in ambient.split(":") else "none"}
 
 
 def check(args: list[str], **kwargs) -> Result:

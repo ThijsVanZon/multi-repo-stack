@@ -68,7 +68,7 @@ def create(store: Path, repository: str, checkout: Path, task: str) -> dict:
         raise Refused(f"{branch} already exists in {checkout}; it is left unchanged")
     fetched = git.run(["-C", str(checkout), "-c", "gc.auto=0", "-c", "maintenance.auto=false", "fetch", "--quiet",
                        "--no-tags", "--no-write-fetch-head", "--recurse-submodules=no", "--", str(store),
-                       f"{state.OBSERVED}heads/dev"], env=git.local_only(store))
+                       f"{state.OBSERVED}heads/dev"], env=git.transport_only(store))
     if not fetched.ok:
         raise git.GitError(f"dev {observed.dev} could not be brought into {checkout}: {fetched.err}")
     # An empty old value: Git creates the branch only if it still does not exist.

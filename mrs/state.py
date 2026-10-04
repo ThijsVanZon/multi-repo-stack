@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import re
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -71,16 +73,29 @@ def check_destination(store: Path, remote: str) -> None:
             raise Redirected(f"configured remote {key} is named like the destination and would replace it")
 
 
+def local_path(remote: str) -> Path | None:
+    """The local repository a path or file:// URL names (decoded as Git decodes it); None for a network URL."""
+    found = git.scheme(remote)
+    if found is None:
+        return Path(remote)
+    parts = urllib.parse.urlsplit(remote)
+    if found != "file" or parts.netloc not in ("", "localhost"):
+        return None
+    return Path(urllib.request.url2pathname(parts.path))
+
+
 def snapshot(store: Path, remote: str) -> dict[str, str]:
-    """Complete ref listing of `remote` from one advertisement."""
+    """Complete ref listing of `remote` from one advertisement. A local target's own hidden-ref configuration is
+    checked; a network provider's is not observable here."""
     check_destination(store, remote)
-    if Path(remote).is_dir():
-        hidden = git.run(["-C", remote, "config", "--get-regexp", r"^(transfer|uploadpack|receive)\.hiderefs$"])
+    local = local_path(remote)
+    if local is not None and local.is_dir():
+        hidden = git.run(["-C", str(local), "config", "--get-regexp", r"^(transfer|uploadpack|receive)\.hiderefs$"])
         if hidden.returncode not in (0, 1):  # 1: none configured
             raise Unknown(f"configuration of {remote} could not be read: {hidden.err}")
         if hidden.ok:
             raise Unknown(f"hidden refs are configured for {remote}; absence cannot be observed")
-    result = git.run(["-C", str(store), "ls-remote", "--", remote], env=git.local_only(remote))
+    result = git.run(["-C", str(store), "ls-remote", "--", remote], env=git.transport_only(remote))
     if not result.ok:
         raise Unknown(f"ls-remote failed (exit {result.returncode}): {result.err}")
     try:
@@ -117,7 +132,7 @@ def fetch(store: Path, remote: str, refs: dict[str, str], extra: tuple[str, ...]
         return
     result = git.run(["-C", str(store), "-c", "gc.auto=0", "-c", "maintenance.auto=false", "fetch", "--quiet",
                       "--no-tags", "--no-write-fetch-head", "--recurse-submodules=no", "--", remote,
-                      *[f"+{ref}:{OBSERVED}{ref[5:]}" for ref in wanted]], env=git.local_only(remote))
+                      *[f"+{ref}:{OBSERVED}{ref[5:]}" for ref in wanted]], env=git.transport_only(remote))
     if not result.ok:
         raise Unknown(f"fetch failed (exit {result.returncode}): {result.err}")
     for ref in wanted:

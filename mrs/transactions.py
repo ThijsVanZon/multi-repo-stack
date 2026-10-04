@@ -1,10 +1,20 @@
-"""Guarded dev-only bootstrap and atomic main/tag/dev release, with read-only reconciliation.
+"""Guarded dev-only bootstrap and atomic main/tag/dev release: preparation, inspection, explicit application and
+read-only reconciliation of one saved operation.
 
-Local fixture boundary: these functions mutate only disposable fixture destinations (an absolute
-path to a local bare repository containing FIXTURE_MARKER, which Git's configuration resolves to
-itself), and their transports may use only Git's file protocol. There is no command-line entry
-for them. prepare_release records a fixture acceptance payload without judging it;
-prepare_accepted_release is the checked path, whose receipt carries a SUFFICIENT assessment of exact C.
+A destination is an absolute path to the root of a local bare repository, or an https, ssh or file URL. Git itself
+must resolve it to exactly that location before every observation and push, and every Git process these
+functions start may use only the destination's own transport.
+
+A real target is changed only through the checked path: bootstrap first verifies the sources B selects, a release
+carries a SUFFICIENT assessment of exact C (prepare_accepted_release), and both run only from the clean shared
+checkout that those sources select. A disposable fixture (a local bare repository containing FIXTURE_MARKER, which
+only test code creates) also admits the low-level prepare_release, which records an unjudged payload for the
+transaction tests, and a tool checkout that is being edited.
+
+Preparation writes only its own operation folder: an operation record and a private store holding the prepared
+objects and a binding of kind, destination and tool. Apply, push and reconciliation load a record only when it is
+exactly what its store prepared and the running tool is the one that prepared it. Nothing is repaired or
+regenerated.
 """
 
 from __future__ import annotations
@@ -12,6 +22,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import urllib.parse
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -25,6 +36,9 @@ FIXTURE_MARKER = "mrs-disposable-fixture"
 OPERATION_FILE = "operation.json"
 ATTEMPTS_FILE = "attempts.log"
 STORE = "repo.git"
+BINDING = "refs/mrs/op/binding"
+_BOUND = ("kind", "remote", "tool")
+_SCHEMES = ("https", "ssh", "file")
 
 
 class Refused(Exception):
@@ -56,18 +70,47 @@ def _utc(now: datetime | None) -> datetime:
     return now.astimezone(timezone.utc).replace(microsecond=0)
 
 
-def _destination(remote: str | Path) -> str:
-    path = Path(remote)
-    if not path.is_absolute():
-        raise Refused("destination", "transactions accept only an absolute path to a local bare repository")
-    if not (path / FIXTURE_MARKER).is_file():
-        raise Refused("destination", f"{path} is not marked as a disposable fixture ({FIXTURE_MARKER}); real "
-                                     "targets need provider application, which is not implemented")
-    probe = git.run(["-C", str(path), "rev-parse", "--is-bare-repository", "--absolute-git-dir"])
+def _destination(remote) -> str:
+    """The one explicit destination. Relative paths, remote names and scp-like addresses are ambiguous, and a URL
+    carrying a password would write a credential into the operation record."""
+    remote = str(remote) if isinstance(remote, (str, Path)) else ""
+    if not remote or any(char in remote for char in "\0\r\n"):
+        raise Refused("destination", f"unusable destination {remote!r}")
+    scheme = git.scheme(remote)
+    if scheme is not None:
+        try:
+            parts = urllib.parse.urlsplit(remote)
+            usable = (scheme in _SCHEMES and not parts.query and not parts.fragment and parts.password is None
+                      and (scheme == "file" or bool(parts.hostname)))
+        except ValueError:
+            usable = False
+        if not usable:
+            raise Refused("destination", f"{remote} is not an https, ssh or file URL of one repository, without "
+                                         "a password")
+    local = state.local_path(remote)
+    if local is None:
+        return remote
+    if not local.is_absolute():
+        raise Refused("destination", "a local destination must be an absolute path or a file:// URL")
+    probe = git.run(["-C", str(local), "rev-parse", "--is-bare-repository", "--absolute-git-dir"])
     lines = probe.out.splitlines() if probe.ok else []
-    if len(lines) != 2 or lines[0] != "true" or not os.path.samefile(lines[1], path):
-        raise Refused("destination", f"{path} is not the root of a bare repository")
-    return str(path)
+    if len(lines) != 2 or lines[0] != "true" or not os.path.samefile(lines[1], local):
+        raise Refused("destination", f"{remote} is not the root of a bare repository")
+    return remote
+
+
+def is_fixture(destination: str) -> bool:
+    """A disposable test fixture: a local bare repository path (not a URL) containing FIXTURE_MARKER."""
+    return git.scheme(destination) is None and (Path(destination) / FIXTURE_MARKER).is_file()
+
+
+def _tool(destination: str) -> dict:
+    """The running tool's identity, recorded with an operation. A real target needs a clean committed checkout."""
+    identity = sources.tool_identity()
+    if not identity["clean"] and not is_fixture(destination):
+        raise Refused("tool", f"a real target is changed only from a clean committed checkout of the shared tool; "
+                              f"the running tool {sources.TOOL_ROOT} is {identity}")
+    return identity
 
 
 def _resolves_to_itself(store: Path, destination: str) -> None:
@@ -95,7 +138,14 @@ def _new_store(work: Path) -> Path:
     return store
 
 
+def _bound(operation: dict) -> bytes:
+    return state.encode_receipt({key: operation[key] for key in _BOUND})
+
+
 def _write(work: Path, operation: dict) -> None:
+    store = work / STORE
+    blob = git.check(["-C", str(store), "hash-object", "-w", "--no-filters", "--stdin"], input=_bound(operation)).out
+    git.check(["-C", str(store), "update-ref", BINDING, blob, ""])
     with open(work / OPERATION_FILE, "xb") as handle:
         handle.write(json.dumps(operation, indent=2, sort_keys=True).encode("utf-8") + b"\n")
 
@@ -103,14 +153,15 @@ def _write(work: Path, operation: dict) -> None:
 _RECORD_KEYS = {
     "bootstrap": {"format", "kind", "repository", "remote", "version", "expected", "updates", "tool"},
     "release": {"format", "kind", "repository", "remote", "version", "candidate", "tag", "next", "expected",
-                "updates", "receipt_sha256", "prepared_at", "tool"},
+                "updates", "receipt_sha256", "acceptance_sha256", "prepared_at", "tool"},
 }
 
 
 def load(work: Path) -> dict:
-    """The operation record, refused unless it is exactly the operation its store prepared. Every apply,
-    push and reconciliation loads through here; a record is never repaired."""
-    path = Path(work) / OPERATION_FILE
+    """The operation record, refused unless it is exactly the operation its store prepared, for the destination
+    and by the tool that the store bound, and the running tool is that same tool. Every inspection, apply, push
+    and reconciliation loads through here; a record is never repaired."""
+    path, store = Path(work) / OPERATION_FILE, Path(work) / STORE
     try:
         operation = json.loads(path.read_bytes())
     except (OSError, ValueError) as exc:
@@ -119,39 +170,53 @@ def load(work: Path) -> dict:
     if not isinstance(kind, str) or operation.get("format") != OPERATION_FORMAT or set(operation) != _RECORD_KEYS.get(kind):
         raise Refused("operation", f"{path} is not a complete {OPERATION_FORMAT} record")
     try:
-        facts, updates, leases = _prepared(Path(work) / STORE, operation)
+        facts, updates, leases, judged = _prepared(store, operation)
+        bound = git.run(["-C", str(store), "cat-file", "blob", BINDING])
     except (state.NotContract, state.Malformed, state.Unknown, config.ConfigError, versions.VersionError,
-            git.GitError) as exc:
+            git.GitError, KeyError, TypeError, ValueError) as exc:
         raise Refused("operation", f"{path} does not match the objects prepared in its store: {exc}") from None
     for key, value in facts.items():
         if operation[key] != value:
             raise Refused("operation", f"{path}: {key} is {operation[key]!r}, but the prepared objects give {value!r}")
-    if not isinstance(operation["remote"], str) or operation["updates"] != updates or operation["expected"] != leases:
-        raise Refused("operation", f"{path} must name its destination and exactly the updates {updates} "
-                                   f"with leases {leases}")
+    if operation["updates"] != updates or operation["expected"] != leases:
+        raise Refused("operation", f"{path} must name exactly the updates {updates} with leases {leases}")
+    if not bound.ok or bound.stdout != _bound(operation):
+        raise Refused("operation", f"{path} does not name the kind, destination and tool that its store bound at "
+                                   "preparation")
+    destination = _destination(operation["remote"])
+    running = sources.tool_identity()
+    if running != operation["tool"]:
+        raise Refused("tool", f"the operation was prepared by the tool at {operation['tool']}, but the running tool "
+                              f"is {running}; inspect, apply and reconcile it with the tool that prepared it")
+    if not is_fixture(destination):
+        _tool(destination)
+        if kind == "release" and judged.get("format") != acceptance_module.ACCEPTANCE_FORMAT:
+            raise Refused("acceptance", f"{path}: a real target is released only with an assessed acceptance")
     return operation
 
 
-def _prepared(store: Path, operation: dict) -> tuple[dict, dict, dict]:
-    """The record facts, ref updates and leases that the objects prepared in `store` allow: bootstrap
-    creates only dev at B; a release moves main P->C, creates tag N at T and moves dev C->D."""
+def _prepared(store: Path, operation: dict) -> tuple[dict, dict, dict, dict]:
+    """The record facts, ref updates and leases that the objects prepared in `store` allow, and the acceptance
+    the receipt carries: bootstrap creates only dev at B; a release moves main P->C, creates tag N at T and
+    moves dev C->D."""
     if operation["kind"] == "bootstrap":
         commit = _prepared_object(store, "refs/mrs/op/bootstrap^{commit}")
         facts = {"repository": config.at_commit(store, commit).repository,
                  "version": str(versions.parse_file(git.read_file(store, commit, "VERSION") or b""))}
-        return facts, {DEV: commit}, {DEV: None}
+        return facts, {DEV: commit}, {DEV: None}, {}
     tag = _prepared_object(store, "refs/mrs/op/tag^{tag}")
     release = state.contract_release(store, operation["version"], tag)  # the existing C/T/D invariants
     receipt = json.loads(release.receipt)
     facts = {key: receipt[key] for key in ("repository", "version", "candidate", "next")}
-    facts.update(tag=tag, receipt_sha256=hashlib.sha256(release.receipt).hexdigest())
+    facts.update(tag=tag, receipt_sha256=hashlib.sha256(release.receipt).hexdigest(),
+                 acceptance_sha256=hashlib.sha256(state.encode_receipt(receipt["acceptance"])).hexdigest())
     previous = operation["expected"].get(MAIN) if isinstance(operation["expected"], dict) else None
     if previous is not None and not state.ancestor(
             store, state.exact_commit(store, previous, "expected main", len(tag)), release.candidate):
         raise Refused("operation", f"expected main {previous} is not an ancestor of the candidate")
     tag_ref = f"refs/tags/{release.version}"
     return (facts, {MAIN: release.candidate, tag_ref: tag, DEV: release.next_commit},
-            {MAIN: previous, tag_ref: None, DEV: release.candidate})
+            {MAIN: previous, tag_ref: None, DEV: release.candidate}, receipt["acceptance"])
 
 
 def _prepared_object(store: Path, rev: str) -> str:
@@ -172,14 +237,30 @@ def _identity_env(identity: Identity, when: datetime) -> dict[str, str]:
 
 # --- preparation -----------------------------------------------------------------------------
 
-def prepare_bootstrap(*, source: Path, commit: str, remote: str | Path, work: Path) -> dict:
-    """Prepare creation of dev at exact `commit` (B) from a local source repository."""
+def prepare_bootstrap(*, source: Path, commit: str, remote: str | Path, work: Path,
+                      pstack: Path | None = None) -> dict:
+    """Prepare creation of dev at exact `commit` (B) from a local source repository. For a real target the
+    running tool and `pstack` must be the clean sources B selects."""
     destination = _destination(remote)
+    if git.scheme(source) is not None or not Path(source).is_absolute():
+        raise Refused("source", f"the source of B must be an absolute path to a local repository, not {source}")
+    if not is_fixture(destination):  # before any scratch: the running tool and pstack are the sources B selects
+        found = git.run(["-C", str(source), "rev-parse", "--verify", "--quiet", "--end-of-options",
+                         f"{commit}^{{commit}}"])
+        if not found.ok or found.out != commit:
+            raise Refused("source", f"exact commit {commit} is not available from {source}")
+        try:
+            sources.selected(config.at_commit(Path(source), commit), commit, pstack)
+        except (config.ConfigError, git.GitError) as exc:
+            raise Refused("candidate", str(exc)) from None
+        except sources.SourceError as exc:
+            raise Refused("source", str(exc)) from None
+        _tool(destination)
     store = _new_store(Path(work))
     _resolves_to_itself(store, destination)
     fetched = git.run(["-C", str(store), "-c", "gc.auto=0", "fetch", "--quiet", "--no-tags", "--no-write-fetch-head",
                        "--recurse-submodules=no", "--", str(source), f"{commit}:refs/mrs/op/bootstrap"],
-                      env=git.local_only(source))
+                      env=git.transport_only(source))
     got = git.run(["-C", str(store), "rev-parse", "--verify", "--quiet", "refs/mrs/op/bootstrap^{commit}"])
     if not fetched.ok or got.out != commit:
         raise Refused("source", f"exact commit {commit} is not available from {source}")
@@ -193,7 +274,7 @@ def prepare_bootstrap(*, source: Path, commit: str, remote: str | Path, work: Pa
         raise Refused("candidate", str(exc)) from None
     operation = {"format": OPERATION_FORMAT, "kind": "bootstrap", "repository": selection.repository,
                  "remote": destination, "version": str(version), "expected": {DEV: None}, "updates": {DEV: commit},
-                 "tool": sources.tool_identity()}
+                 "tool": _tool(destination)}
     current = _classify(store, destination, operation)
     if current.status == "UNKNOWN":
         raise state.Unknown(current.detail)
@@ -227,7 +308,10 @@ def prepare_release(*, remote: str | Path, work: Path, candidate: str, acceptanc
                     now: datetime | None = None) -> dict:
     """Prepare the atomic promotion of exact integrated `candidate` (C) with receipt tag T and next line D.
     Low-level fixture path: `acceptance` is recorded, not judged, and cannot claim the assessed format;
-    prepare_accepted_release is the checked path."""
+    prepare_accepted_release is the checked path, and the only one for a real target."""
+    if not is_fixture(_destination(remote)):
+        raise Refused("acceptance", "an unjudged acceptance payload is only for disposable fixtures; a real target "
+                                    "is released only from a SUFFICIENT assessment (prepare_accepted_release)")
     if not isinstance(acceptance, dict) or set(acceptance) != {"criteria", "results", "verdict"}:
         raise Refused("acceptance", "acceptance must contain exactly criteria, results and verdict")
     return _prepare_release(remote, work, candidate, lambda store, observed: acceptance, identity, now)
@@ -237,7 +321,7 @@ def prepare_accepted_release(*, remote: str | Path, work: Path, candidate: str, 
                              attestation: bytes | None, proposals: bytes | None = None, pstack: Path | None,
                              identity: Identity, now: datetime | None = None) -> dict:
     """The checked path: the receipt carries only a SUFFICIENT assessment of exactly the observed dev C, made
-    from collected records and a non-author verdict by the sources C selects. Fixture-only, like the kernel."""
+    from collected records and a non-author verdict by the sources C selects."""
     def assessed(store: Path, observed: state.State) -> dict:
         result = acceptance_module.assess(store, observed, candidate, records, attestation, proposals, pstack)
         if result.status != acceptance_module.SUFFICIENT:
@@ -251,6 +335,7 @@ def _prepare_release(remote: str | Path, work: Path, candidate: str, payload, id
     now = _utc(now)
     env = _identity_env(identity, now)
     destination = _destination(remote)
+    tool = _tool(destination)
     store = _new_store(Path(work))
     _resolves_to_itself(store, destination)
     observed = state.observe(store, destination)
@@ -290,8 +375,9 @@ def _prepare_release(remote: str | Path, work: Path, candidate: str, payload, id
                  "next": {"commit": next_commit, "version": str(following), "opened": opened.isoformat()},
                  "expected": {MAIN: observed.main, tag_ref: None, DEV: candidate},
                  "updates": {MAIN: candidate, tag_ref: tag, DEV: next_commit},
-                 "receipt_sha256": hashlib.sha256(receipt).hexdigest(), "prepared_at": now.isoformat(),
-                 "tool": sources.tool_identity()}
+                 "receipt_sha256": hashlib.sha256(receipt).hexdigest(),
+                 "acceptance_sha256": hashlib.sha256(state.encode_receipt(acceptance)).hexdigest(),
+                 "prepared_at": now.isoformat(), "tool": tool}
     _write(Path(work), operation)
     return operation
 
@@ -349,11 +435,22 @@ def _classify_release(store: Path, operation: dict, refs: dict[str, str]) -> Out
 
 # --- application -----------------------------------------------------------------------------
 
-def _same_path(reported: str, destination: str) -> bool:
+def _shown(destination: str) -> str:
+    """The destination as Git reports it after a push: a URL without its user information, a path as given."""
+    if git.scheme(destination) is None:
+        return destination
+    head, separator, rest = destination.partition("://")
+    authority, slash, path = rest.partition("/")
+    return head + separator + authority.rpartition("@")[2] + slash + path
+
+
+def _reported_elsewhere(reported: str, destination: str) -> bool:
+    if git.scheme(destination) is not None:  # a URL is compared as text, never resolved as a local path
+        return reported != _shown(destination)
     try:
-        return os.path.samefile(reported, destination)
+        return not os.path.samefile(reported, destination)
     except OSError:
-        return False
+        return True
 
 
 def _push_result(result: git.Result, operation: dict, destination: str) -> str:
@@ -367,7 +464,7 @@ def _push_result(result: git.Result, operation: dict, destination: str) -> str:
             reported = line[3:]
         elif len(parts) == 3 and len(parts[0]) == 1:
             statuses[parts[1].rpartition(":")[2]] = (parts[0], parts[2])
-    if reported is not None and not _same_path(reported, destination):
+    if reported is not None and _reported_elsewhere(reported, destination):
         return "destination-mismatch"
     summaries = " ".join(summary for _, summary in statuses.values())
     if result.ok and set(statuses) == refs and all(flag in "*+ " for flag, _ in statuses.values()):
@@ -390,6 +487,16 @@ def _push_result(result: git.Result, operation: dict, destination: str) -> str:
     return "unknown"
 
 
+def push_command(operation: dict) -> list[str]:
+    """The Git arguments of the one guarded push, run in the operation's store: explicit leases on every
+    updated ref, full refspecs, one destination and no ambient extras."""
+    args = ["push", "--porcelain", "--no-follow-tags", "--recurse-submodules=no", "--no-force-if-includes"]
+    if operation["kind"] == "release":
+        args.append("--atomic")
+    args += [f"--force-with-lease={ref}:{old or ''}" for ref, old in operation["expected"].items()]
+    return args + ["--", operation["remote"], *[f"{new}:{ref}" for ref, new in operation["updates"].items()]]
+
+
 def push(work: Path) -> str:
     """The guarded primitive: one push with explicit leases and no ambient extras. No fallback, no retry."""
     work = Path(work)
@@ -398,13 +505,8 @@ def push(work: Path) -> str:
     _resolves_to_itself(store, destination)
     with open(work / ATTEMPTS_FILE, "a", encoding="utf-8") as log:
         log.write(f"{datetime.now(timezone.utc).isoformat()} push attempted\n")
-    args = ["-C", str(store), "push", "--porcelain", "--no-follow-tags", "--recurse-submodules=no",
-            "--no-force-if-includes"]
-    if operation["kind"] == "release":
-        args.append("--atomic")
-    args += [f"--force-with-lease={ref}:{old or ''}" for ref, old in operation["expected"].items()]
-    args += ["--", destination, *[f"{new}:{ref}" for ref, new in operation["updates"].items()]]
-    return _push_result(git.run(args, env=git.local_only(destination)), operation, destination)
+    result = git.run(["-C", str(store), *push_command(operation)], env=git.transport_only(destination))
+    return _push_result(result, operation, destination)
 
 
 def reconcile(work: Path) -> Outcome:
