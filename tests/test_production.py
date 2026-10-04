@@ -228,8 +228,8 @@ class ProductionReleaseTests(RealTargetTestCase):
     def test_saved_operation_bindings_and_store_corruption_are_refused_before_any_push(self):
         """Saved operations: another destination, preparing tool, next line or acceptance identity in the record,
         a missing binding, a store ref naming another object, a missing prepared object, another or a dirty running
-        tool, and a moved target are each refused by apply and reconcile before any push; neither the target nor
-        another repository changes. The untouched operation then applies."""
+        tool (also through direct library calls), and a moved target are each refused by apply and reconcile before
+        any push; neither the target nor another repository changes. The untouched operation then applies."""
         target, _, _ = self.real_consumer()
         c = self.integrate(target, {"docs/notes.md": "integrated task\n"}, "Integrate a task")
         record, verdict = self.accepted(target, "record")
@@ -285,6 +285,15 @@ class ProductionReleaseTests(RealTargetTestCase):
                     restore()
                 self.assertFalse((work / "attempts.log").exists(), "no push may be attempted")
                 self.assertEqual((refs(target), refs(other)), ({DEV: c}, {DEV: c}))
+        with self.subTest("direct library calls from this process, which runs another tool"):
+            outcome = transactions.apply(work)
+            self.assertEqual((outcome.status, outcome.reason), ("REFUSED", "tool"), outcome)
+            for call in (transactions.push, transactions.reconcile):
+                with self.assertRaises(Refused) as caught:
+                    call(work)
+                self.assertEqual(caught.exception.code, "tool")
+            self.assertFalse((work / "attempts.log").exists(), "no push may be attempted")
+            self.assertEqual(refs(target), {DEV: c})
 
         self.applied("op")
         self.assertEqual(refs(target), {MAIN: c, TAG: operation["tag"], DEV: d})
