@@ -152,12 +152,16 @@ class ConsumerTestCase(GitTestCase):
         return json.loads(proc.stdout.decode("utf-8"))
 
     def checked(self, call: str, work: Path, now: datetime = NOW) -> str:
-        """transactions.apply or reconcile of a checked operation, run by the clean shared snapshot that prepared
-        it (an operation is applied only by the tool that prepared it). Returns the outcome's status."""
+        """transactions.apply, push or reconcile of a checked operation, run by the clean shared snapshot that
+        prepared it (an operation is applied only by the tool that prepared it). Returns the outcome's status,
+        the push result, or "Refused: <code>"."""
         code = ("import sys; from datetime import datetime; sys.path.insert(0, sys.argv[1]); "
-                "from mrs import transactions; w = sys.argv[3]; "
-                "print((transactions.apply(w, now=datetime.fromisoformat(sys.argv[4])) if sys.argv[2] == 'apply' "
-                "else transactions.reconcile(w)).status)")
+                "from mrs import transactions; w, now = sys.argv[3], datetime.fromisoformat(sys.argv[4])\n"
+                "try:\n"
+                "    print(transactions.push(w, now=now) if sys.argv[2] == 'push' else (transactions.apply(w, now=now) "
+                "if sys.argv[2] == 'apply' else transactions.reconcile(w)).status)\n"
+                "except transactions.Refused as exc:\n"
+                "    print('Refused: ' + exc.code)\n")
         proc = subprocess.run([sys.executable, "-I", "-B", "-c", code, str(shared_snapshot()[0]), call, str(work),
                                now.isoformat()], capture_output=True)
         self.assertEqual(proc.returncode, 0, proc.stderr.decode("utf-8", "replace"))

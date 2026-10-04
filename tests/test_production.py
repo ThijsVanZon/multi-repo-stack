@@ -13,6 +13,12 @@ from tests.support import (AMBIENT_GLOBAL_CONFIG, DEV, MAIN, RELEASER, git, has_
 
 TAG = "refs/tags/26.1.0"
 IDENTITY = "Fixture Releaser <fixture-releaser@example.invalid>"
+COMPETING_DEV = """( unset GIT_QUARANTINE_PATH GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES
+  old=$(git rev-parse refs/heads/dev)
+  new=$(echo "competing integration" | git commit-tree "$old^{tree}" -p "$old")
+  git update-ref refs/heads/dev "$new" "$old" && echo "$new" > fixture-competitor )
+exit 0
+"""
 
 
 def file_url(path: Path) -> str:
@@ -144,7 +150,26 @@ class ProductionBootstrapTests(RealTargetTestCase):
         self.assertEqual(refs(sub_remote), sub_before)
         self.assertFalse(has_object(sub_remote, unpublished))
 
+    def test_a_direct_library_push_refuses_a_bootstrap_whose_target_is_no_longer_empty(self):
+        """Direct library calls: with the saved bootstrap unchanged, a main created on the target before application
+        makes apply and a direct push by the preparing tool refuse it as nonempty, with no push attempted and the
+        target unchanged. Once the target is empty again, the same direct push creates only dev at B."""
+        source, b = self.lifecycle_source(name="bootstrap source")
+        target = self.bare("target.git", fixture=False)
+        self.assertEqual(self.prepare_bootstrap(target, source, b, "op")[0], 0)
+        out("-C", target, "fetch", "--quiet", "--no-tags", source, b)
+        out("-C", target, "update-ref", MAIN, b)
 
+        code, report = self.operation("apply", "op")
+        pushed = self.checked("push", self.tmp / "op")
+
+        self.assertEqual((code, report["status"], report["reason"], pushed),
+                         (3, "REFUSED", "nonempty", "Refused: nonempty"))
+        self.assertFalse((self.tmp / "op" / "attempts.log").exists(), "no push may be attempted")
+        self.assertEqual(refs(target), {MAIN: b})
+        out("-C", target, "update-ref", "-d", MAIN, b)
+        self.assertEqual(self.checked("push", self.tmp / "op"), "success")
+        self.assertEqual(refs(target), {DEV: b})
 class ProductionReleaseTests(RealTargetTestCase):
     def test_first_and_later_releases_through_the_commands_keep_exact_identities_and_history(self):
         """First release / Later release / Retries: on a file:// URL target, a SUFFICIENT assessment of exact C
@@ -298,6 +323,40 @@ class ProductionReleaseTests(RealTargetTestCase):
         self.applied("op")
         self.assertEqual(refs(target), {MAIN: c, TAG: operation["tag"], DEV: d})
         self.assertEqual(refs(other), {DEV: c})
+    def test_a_direct_library_push_keeps_the_apply_preconditions_and_the_leases(self):
+        """Direct library calls: with the saved release unchanged, a clock in a later year than the next line's
+        opening makes apply and a direct push by the preparing tool refuse it, with no push attempted and the
+        target unchanged. In the prepared state the direct push publishes main, T and D once; a competing dev after
+        the advertisement is still rejected by the leases themselves; the completed release stays a NOOP for apply
+        in that later year, and a direct push of it is refused without an attempt."""
+        target, _, _ = self.real_consumer()
+        c = self.integrate(target, {"docs/notes.md": "integrated task\n"}, "Integrate a task")
+        record, verdict = self.accepted(target, "record")
+        race = self.mirror(target, "race target.git")
+        operation = self.prepare_release(target, "op", c, [record], verdict)[1]["operation"]
+        self.assertEqual(self.prepare_release(race, "race op", c, [record], verdict)[0], 0)
+        work = self.tmp / "op"
+        opened = datetime.fromisoformat(operation["next"]["opened"]).replace(hour=12, tzinfo=timezone.utc)
+        later = opened.replace(year=opened.year + 1, month=1, day=1)
+
+        self.assertEqual((self.checked("apply", work, later), self.checked("push", work, later)),
+                         ("REFUSED", "Refused: year-changed"))
+        self.assertFalse((work / "attempts.log").exists(), "no push may be attempted")
+        self.assertEqual(refs(target), {DEV: c})
+
+        self.hook(race, "pre-receive", COMPETING_DEV)
+        self.assertEqual(self.checked("push", self.tmp / "race op", opened), "stale")
+        competitor = (race / "fixture-competitor").read_text(encoding="utf-8").strip()
+        self.assertEqual(refs(race), {DEV: competitor})
+
+        self.assertEqual(self.checked("push", work, opened), "success")
+        released = {MAIN: c, TAG: operation["tag"], DEV: operation["next"]["commit"]}
+        self.assertEqual(refs(target), released)
+        self.assertEqual((self.checked("apply", work, later), self.checked("push", work, later)),
+                         ("NOOP", "Refused: completed"))
+        self.assertEqual(refs(target), released)
+        for name in ("op", "race op"):
+            self.assertEqual(len((self.tmp / name / "attempts.log").read_text(encoding="utf-8").splitlines()), 1)
 
     def test_redirected_or_unreadable_destination_configuration_publishes_nowhere(self):
         """Single effective destination: after preparation, a pushInsteadOf rewrite of the target refuses apply and
@@ -341,12 +400,6 @@ class ProductionReleaseTests(RealTargetTestCase):
         record, verdict = self.accepted(target, "record")
         rival = self.checkout("rival")
         self.commit(rival, {"rival.txt": "x\n"}, "rival")
-        competing = """( unset GIT_QUARANTINE_PATH GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES
-  old=$(git rev-parse refs/heads/dev)
-  new=$(echo "competing integration" | git commit-tree "$old^{tree}" -p "$old")
-  git update-ref refs/heads/dev "$new" "$old" && echo "$new" > fixture-competitor )
-exit 0
-"""
 
         def rejecting(ref):
             return lambda m: self.hook(m, "update", f'[ "$1" = "{ref}" ] && exit 1\nexit 0\n')
@@ -354,7 +407,7 @@ exit 0
         cases = {
             "competing dev after preparation": (
                 lambda m: self.integrate(m, {"rival.py": "RIVAL = 1\n"}, "Competing task"), ("REFUSED", "stale")),
-            "competing dev after advertisement": (lambda m: self.hook(m, "pre-receive", competing),
+            "competing dev after advertisement": (lambda m: self.hook(m, "pre-receive", COMPETING_DEV),
                                                   ("REFUSED", "stale")),
             "main created after preparation": (
                 lambda m: out("-C", rival, "push", "--quiet", m, f"HEAD:{MAIN}"), ("REFUSED", "stale")),

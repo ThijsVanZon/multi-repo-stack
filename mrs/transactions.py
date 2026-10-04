@@ -497,16 +497,42 @@ def push_command(operation: dict) -> list[str]:
     return args + ["--", operation["remote"], *[f"{new}:{ref}" for ref, new in operation["updates"].items()]]
 
 
-def push(work: Path) -> str:
-    """The guarded primitive: one push with explicit leases and no ambient extras. No fallback, no retry."""
-    work = Path(work)
-    operation, store = load(work), work / STORE
-    destination = _destination(operation["remote"])
+def _ready(store: Path, destination: str, operation: dict, now: datetime) -> Outcome:
+    """The target's state as apply reports it; NOT_APPLIED only when a push may be attempted, which for a release
+    also needs its next line to have been opened in the current UTC year. The leases, not this observation, guard
+    the push against any change after it."""
+    before = _classify(store, destination, operation)
+    if before.status == "NOT_APPLIED" and operation["kind"] == "release":
+        opened = date.fromisoformat(operation["next"]["opened"])
+        if now.year != opened.year:
+            return Outcome("REFUSED", "year-changed", f"line {operation['next']['version']} was opened for "
+                           f"{opened.year} and the operation is not applied; prepare it again", before.refs)
+    return before
+
+
+def _attempt(work: Path, store: Path, operation: dict, destination: str) -> str:
+    """One push with explicit leases and no ambient extras. No fallback, no retry."""
     _resolves_to_itself(store, destination)
     with open(work / ATTEMPTS_FILE, "a", encoding="utf-8") as log:
         log.write(f"{datetime.now(timezone.utc).isoformat()} push attempted\n")
     result = git.run(["-C", str(store), *push_command(operation)], env=git.transport_only(destination))
     return _push_result(result, operation, destination)
+
+
+def push(work: Path, *, now: datetime | None = None) -> str:
+    """The guarded primitive. A real target is pushed only in the state in which apply pushes; otherwise this raises
+    Refused, or state.Unknown. A disposable fixture is pushed in any state, so tests can show the leases reject."""
+    work = Path(work)
+    operation, store = load(work), work / STORE
+    destination = _destination(operation["remote"])
+    _resolves_to_itself(store, destination)
+    if not is_fixture(destination):
+        before = _ready(store, destination, operation, _utc(now))
+        if before.status == "UNKNOWN":
+            raise state.Unknown(before.detail)
+        if before.status != "NOT_APPLIED":
+            raise Refused(before.reason, before.detail)
+    return _attempt(work, store, operation, destination)
 
 
 def reconcile(work: Path) -> Outcome:
@@ -533,19 +559,14 @@ def apply(work: Path, *, now: datetime | None = None) -> Outcome:
         return Outcome("REFUSED", exc.code, exc.detail)
     except state.Unknown as exc:
         return Outcome("UNKNOWN", "destination", str(exc))
-    before = _classify(store, destination, operation)
+    before = _ready(store, destination, operation, now)
     if before.status == "COMPLETED":
         return Outcome("NOOP", "completed", before.detail, before.refs)
     if before.status != "NOT_APPLIED":
         status = before.status if before.status in ("MIXED", "UNKNOWN") else "REFUSED"
         return Outcome(status, before.reason, before.detail, before.refs)
-    if operation["kind"] == "release":
-        opened = date.fromisoformat(operation["next"]["opened"])
-        if now.year != opened.year:
-            return Outcome("REFUSED", "year-changed", f"line {operation['next']['version']} was opened for "
-                           f"{opened.year} and the operation is not applied; prepare it again", before.refs)
     try:
-        pushed = push(work)
+        pushed = _attempt(work, store, operation, destination)
     except Refused as exc:
         return Outcome("REFUSED", exc.code, exc.detail, before.refs)
     except state.Unknown as exc:
