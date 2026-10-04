@@ -76,7 +76,7 @@ Each test's docstring names the contract row it exercises. Every assertion reads
   - a research shape that checks a synthetic result;
   - a probe shape for the collection boundaries.
 - Their verdicts are SIMULATED attestations written by test code.
-- Low-level transaction tests use bare repositories marked as disposable fixtures. The production tests (`tests/test_production.py`) use unmarked bare repositories and `file://` URLs as real targets, through the public `prepare` and `operation` commands run from a clean checkout of the source under test.
+- Low-level transaction tests use bare repositories marked as disposable fixtures. The production tests (`tests/test_production.py`) use unmarked bare repositories and `file://` URLs as real targets, through the public `prepare` and `operation` commands, and through direct library calls, run from a clean checkout of the source under test.
 
 ## First-release gates this project keeps open
 
