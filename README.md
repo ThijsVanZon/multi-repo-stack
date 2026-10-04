@@ -110,4 +110,4 @@ Tests and the recipe for this project's own records: see `docs/verification.md`.
 
 ## License
 
-MIT (see `LICENSE`). The copyright attribution is deliberately unresolved and must be confirmed before any publication.
+MIT (see `LICENSE`).
