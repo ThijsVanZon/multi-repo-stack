@@ -174,10 +174,18 @@ class ProductionBootstrapTests(RealTargetTestCase):
     def test_malformed_or_password_destinations_are_refused_without_repeating_them(self):
         """Destinations: a URL that cannot be parsed, and https, ssh and file URLs carrying a dummy password, are
         refused as destinations by both preparations, with a clear reason that does not repeat the password and no
-        traceback. No operation folder is written and the source is unchanged."""
+        traceback. No operation folder is written and the source is unchanged. Observing commands report such an
+        unparseable URL as UNKNOWN, also without repeating it."""
         source, b = self.lifecycle_source(name="input source")
         caller = tree_digest(source)
         secret = "DUMMY_NOT_A_SECRET"
+
+        def run(*args):
+            proc = subprocess.run([sys.executable, "-I", "-B", str(shared_snapshot()[0] / "mrs"), *map(str, args),
+                                   "--json"], capture_output=True)
+            self.assertNotIn(secret.encode(), proc.stdout + proc.stderr)
+            return proc, json.loads(proc.stdout.decode("utf-8"))
+
         urls = {"unparseable": "https://[unbalanced/owner/app.git",
                 "https password": f"https://user:{secret}@example.invalid/owner/app.git",
                 "ssh password": f"ssh://git:{secret}@example.invalid/owner/app.git",
@@ -188,14 +196,20 @@ class ProductionBootstrapTests(RealTargetTestCase):
                                ("release", ["--candidate", b, "--identity", IDENTITY])):
                 with self.subTest(name, kind=kind):
                     work = self.tmp / f"{name} {kind} op"
-                    proc = subprocess.run([sys.executable, "-I", "-B", str(shared_snapshot()[0] / "mrs"), "prepare",
-                                           kind, "--repository", url, *map(str, args), "--pstack", str(self.pstack()),
-                                           "--work", str(work), "--json"], capture_output=True)
-                    report = json.loads(proc.stdout.decode("utf-8"))
+                    proc, report = run("prepare", kind, "--repository", url, *args, "--pstack", self.pstack(),
+                                       "--work", work)
                     self.assertEqual((proc.returncode, report["status"], proc.stderr), (3, "REFUSED", b""), report)
                     self.assertTrue(report["reason"].startswith("destination: the destination is "), report)
-                    self.assertNotIn(secret.encode(), proc.stdout + proc.stderr)
                     self.assertFalse(work.exists())
+        unparseable = f"https://user:{secret}@[unbalanced/owner/app.git"
+        for args in (("inspect", "--remote", unparseable),
+                     ("collect", "--repository", unparseable, "--pstack", self.pstack(), "--out", self.tmp / "r.json"),
+                     ("assess", "--repository", unparseable, "--pstack", self.pstack())):
+            with self.subTest(args[0]):
+                proc, report = run(*args)
+                self.assertEqual((proc.returncode, report.get("status", report.get("kind")), proc.stderr),
+                                 (4, "UNKNOWN", b""), report)
+        self.assertFalse((self.tmp / "r.json").exists())
         self.assertEqual(tree_digest(source), caller)
 
 

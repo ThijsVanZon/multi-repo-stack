@@ -52,8 +52,13 @@ def check_destination(store: Path, remote: str) -> None:
     Git resolves the effective URLs from `store` with the configuration and environment its transports
     use there, so every configuration source, longest-match and empty url.<base>.(push)insteadOf prefixes
     are Git's own semantics rather than a re-implementation. A remote whose name is the destination
-    replaces it on Windows. Configuration that Git cannot read is UNKNOWN, never "no redirection".
+    replaces it on Windows. Configuration that Git cannot read is UNKNOWN, never "no redirection", and so is a
+    URL this tool cannot parse, which is not repeated, since it may carry a credential.
     """
+    try:
+        local_path(remote)
+    except (ValueError, OSError):
+        raise Unknown("the destination is not a parseable URL; its effective location cannot be checked") from None
     recorded = git.run(["config", "--file", str(Path(store) / "config"), "--replace-all",
                         f"remote.{PROBE_REMOTE}.url", remote])
     if not recorded.ok:
