@@ -5,8 +5,8 @@ from datetime import datetime, timezone
 
 from mrs import state, transactions
 from mrs.transactions import Refused
-from tests.support import (DEV, MAIN, NOW, GitTestCase, git, kill_tree, out, refs, start_kernel,
-                           wait_for)
+from tests.support import (DEV, MAIN, NOW, GitTestCase, git, kill_tree, out, receiver_capabilities, refs,
+                           start_kernel, wait_for)
 
 TAG = "refs/tags/26.1.0"
 
@@ -196,7 +196,9 @@ class AtomicTests(GitTestCase):
         """Atomic failure: a receiver without atomic support refuses; no sequential fallback is tried."""
         target, _, b = self.bootstrapped()
         work, _ = self.prepare(target)
-        out("-C", target, "config", "receive.advertiseAtomic", "false")
+        self.assertIn(b"atomic", receiver_capabilities(target), "control: the receiver advertises atomic by default")
+        self.receiver_config("receive.advertiseAtomic", "false")
+        self.assertNotIn(b"atomic", receiver_capabilities(target), "the receiver no longer advertises atomic")
 
         outcome = transactions.apply(work, now=NOW)
 
@@ -276,13 +278,15 @@ exit 0
         """Retry and uncertainty: a server that applies dev itself and then fails the push leaves MIXED."""
         target, _, b = self.bootstrapped()
         work, operation = self.prepare(target)
-        out("-C", target, "config", "receive.procReceiveRefs", DEV)
+        self.receiver_config("receive.procReceiveRefs", DEV)
         (target / "applied-target").write_text(operation["next"]["commit"] + "\n", encoding="utf-8")
-        self.hook(target, "proc-receive", f"""( unset GIT_QUARANTINE_PATH GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES
+        self.hook(target, "proc-receive", f""": > fixture-proc-receive-ran
+( unset GIT_QUARANTINE_PATH GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES
   git update-ref {DEV} "$(cat applied-target)" {b} )
 exit 1
 """)
         outcome = transactions.apply(work, now=NOW)
+        self.assertTrue((target / "fixture-proc-receive-ran").is_file(), "the receiver ran the proc-receive hook")
         self.assertEqual(outcome.status, "MIXED")
         self.assertEqual(refs(target), {DEV: operation["next"]["commit"]})
 
