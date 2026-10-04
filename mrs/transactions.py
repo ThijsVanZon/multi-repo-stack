@@ -12,9 +12,9 @@ only test code creates) also admits the low-level prepare_release, which records
 transaction tests, and a tool checkout that is being edited.
 
 Preparation writes only its own operation folder: an operation record and a private store holding the prepared
-objects and a binding of kind, destination and tool. Apply, push and reconciliation load a record only when it is
-exactly what its store prepared and the running tool is the one that prepared it. Nothing is repaired or
-regenerated.
+objects and a binding of kind, destination, tool and the expected values observed at preparation (an absent main
+included). Apply, push and reconciliation load a record only when it is exactly what its store prepared and the
+running tool is the one that prepared it. Nothing is repaired or regenerated.
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ OPERATION_FILE = "operation.json"
 ATTEMPTS_FILE = "attempts.log"
 STORE = "repo.git"
 BINDING = "refs/mrs/op/binding"
-_BOUND = ("kind", "remote", "tool")
+_BOUND = ("kind", "remote", "tool", "expected")
 _SCHEMES = ("https", "ssh", "file")
 
 
@@ -158,9 +158,9 @@ _RECORD_KEYS = {
 
 
 def load(work: Path) -> dict:
-    """The operation record, refused unless it is exactly the operation its store prepared, for the destination
-    and by the tool that the store bound, and the running tool is that same tool. Every inspection, apply, push
-    and reconciliation loads through here; a record is never repaired."""
+    """The operation record, refused unless it is exactly the operation its store prepared, for the destination,
+    by the tool and with the expected values that the store bound, and the running tool is that same tool. Every
+    inspection, apply, push and reconciliation loads through here; a record is never repaired."""
     path, store = Path(work) / OPERATION_FILE, Path(work) / STORE
     try:
         operation = json.loads(path.read_bytes())
@@ -181,8 +181,8 @@ def load(work: Path) -> dict:
     if operation["updates"] != updates or operation["expected"] != leases:
         raise Refused("operation", f"{path} must name exactly the updates {updates} with leases {leases}")
     if not bound.ok or bound.stdout != _bound(operation):
-        raise Refused("operation", f"{path} does not name the kind, destination and tool that its store bound at "
-                                   "preparation")
+        raise Refused("operation", f"{path} does not name the kind, destination, tool and expected values that its "
+                                   "store bound at preparation")
     destination = _destination(operation["remote"])
     running = sources.tool_identity()
     if running != operation["tool"]:

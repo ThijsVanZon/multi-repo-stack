@@ -323,6 +323,64 @@ class ProductionReleaseTests(RealTargetTestCase):
         self.applied("op")
         self.assertEqual(refs(target), {MAIN: c, TAG: operation["tag"], DEV: d})
         self.assertEqual(refs(other), {DEV: c})
+
+    def test_a_changed_main_lease_is_refused_before_any_push_and_the_prepared_one_applies(self):
+        """Saved leases: the store binds the main observed at preparation. A first release whose absent main is
+        changed to ancestor B, even with a competing main at B, and a later release whose P is changed to absence
+        or to ancestor B, are refused by inspect, apply, reconcile and a direct push by the preparing tool, with no
+        push attempted and the target unchanged. The unchanged operations apply, and repeats keep T and D."""
+        target, _, b = self.real_consumer()
+
+        def refused(name, lease, competing_main=None):
+            record = self.tmp / name / "operation.json"
+            saved = record.read_bytes()
+            changed = json.loads(saved)
+            changed["expected"][MAIN] = lease
+            record.write_text(json.dumps(changed, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            if competing_main:
+                out("-C", target, "update-ref", MAIN, competing_main)
+            before = refs(target)
+            try:
+                for verb in ("inspect", "apply", "reconcile"):
+                    code, report = self.operation(verb, name)
+                    self.assertEqual((code, report["status"], report["reason"]), (3, "REFUSED", "operation"), report)
+                self.assertEqual(self.checked("push", self.tmp / name), "Refused: operation")
+                self.assertEqual(refs(target), before)
+            finally:
+                record.write_bytes(saved)
+                if competing_main:
+                    out("-C", target, "update-ref", "-d", MAIN, competing_main)
+            self.assertFalse((self.tmp / name / "attempts.log").exists(), "no push may be attempted")
+
+        c = self.integrate(target, {"docs/notes.md": "integrated task\n"}, "Integrate a task")
+        record, verdict = self.accepted(target, "first")
+        first = self.prepare_release(target, "first op", c, [record], verdict)[1]["operation"]
+        self.assertIsNone(first["expected"][MAIN])
+        with self.subTest("first release: absent main changed to ancestor B, with a competing main at B"):
+            refused("first op", b, competing_main=b)
+        self.applied("first op")
+        self.assertEqual(refs(target), {MAIN: c, TAG: first["tag"], DEV: first["next"]["commit"]})
+
+        c2 = self.integrate(target, {"docs/next.md": "next-line task\n"}, "Integrate a next-line task")
+        record2 = self.accepted(target, "second")[0]
+        criteria = json.loads(record2.read_text(encoding="utf-8"))["criteria"]
+        verdict2 = self.verdict(record2, criteria={"identity": criteria, "previous": criteria,
+                                                   "assessment": "SIMULATED: criteria unchanged since 26.1.0"})
+        second = self.prepare_release(target, "second op", c2, [record2], verdict2)[1]["operation"]
+        self.assertEqual(second["expected"][MAIN], c)
+        for label, lease in (("absence", None), ("ancestor B", b)):
+            with self.subTest(f"later release: P changed to {label}"):
+                refused("second op", lease)
+        self.applied("second op")
+
+        released = {MAIN: c2, TAG: first["tag"], f"refs/tags/{second['version']}": second["tag"],
+                    DEV: second["next"]["commit"]}
+        self.assertEqual(refs(target), released)
+        for name in ("first op", "second op"):
+            self.assertEqual(self.operation("apply", name)[1]["status"], "NOOP")
+            self.assertEqual(self.operation("reconcile", name)[1]["status"], "COMPLETED")
+        self.assertEqual(refs(target), released)
+
     def test_a_direct_library_push_keeps_the_apply_preconditions_and_the_leases(self):
         """Direct library calls: with the saved release unchanged, a clock in a later year than the next line's
         opening makes apply and a direct push by the preparing tool refuse it, with no push attempted and the
