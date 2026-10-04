@@ -157,7 +157,7 @@ exit 0
                 target = self.bare(f"target {reason}.git")
                 out("-C", rival, "push", "--quiet", target, f"{competitor}:refs/fixture/competitor")
                 out("-C", target, "update-ref", "-d", "refs/fixture/competitor")
-                out("-C", target, "config", "receive.procReceiveRefs", DEV)
+                self.receiver_config("receive.procReceiveRefs", DEV)
                 (target / "fixture-proc-receive.py").write_text(PROC_RECEIVE, encoding="utf-8")
                 self.hook(target, "proc-receive", f'exec "{Path(sys.executable).as_posix()}" -I -B '
                                                   f'fixture-proc-receive.py "{reason}" "{rival_dev}"\n')
@@ -166,10 +166,11 @@ exit 0
 
                 outcome = transactions.apply(work)
 
-                self.assertEqual((outcome.status, outcome.reason), expected, outcome)
-                self.assertEqual(refs(target), final)
+                self.assertTrue((target / "fixture-commands").is_file(), "the receiver ran the proc-receive hook")
                 sent = (target / "fixture-commands").read_text(encoding="utf-8").split()
                 self.assertEqual(sent, ["0" * len(b), b, DEV], "client sent create-only expectation")
+                self.assertEqual((outcome.status, outcome.reason), expected, outcome)
+                self.assertEqual(refs(target), final)
 
     def test_corrupt_operation_record_fails_clearly(self):
         """Retry and uncertainty: an unreadable or incomplete operation record is refused with a clear reason
@@ -226,9 +227,10 @@ exit 0
         """Retry and uncertainty: the server applies B but reports failure; the kernel reconciles to completion."""
         target = self.bare("target.git")
         source, b = self.lifecycle_source()
-        out("-C", target, "config", "receive.procReceiveRefs", "refs/heads/dev")
+        self.receiver_config("receive.procReceiveRefs", "refs/heads/dev")
         (target / "applied-target").write_text(b + "\n", encoding="utf-8")
-        self.hook(target, "proc-receive", """( unset GIT_QUARANTINE_PATH GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES
+        self.hook(target, "proc-receive", """: > fixture-proc-receive-ran
+( unset GIT_QUARANTINE_PATH GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES
   git update-ref refs/heads/dev "$(cat applied-target)" "" )
 exit 1
 """)
@@ -237,6 +239,7 @@ exit 1
 
         outcome = transactions.apply(work)
 
+        self.assertTrue((target / "fixture-proc-receive-ran").is_file(), "the receiver ran the proc-receive hook")
         self.assertEqual((outcome.status, outcome.reason), ("APPLIED", "rejected"))
         self.assertIn("reconciliation found completion", outcome.detail)
         self.assertEqual(refs(target), {DEV: b})

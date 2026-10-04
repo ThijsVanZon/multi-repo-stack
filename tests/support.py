@@ -96,6 +96,12 @@ def has_object(repo: Path, oid: str) -> bool:
     return git("-C", repo, "cat-file", "-e", oid, check=False).returncode == 0
 
 
+def receiver_capabilities(repo: Path) -> list[bytes]:
+    """Capabilities receive-pack advertises for `repo`, read from its own advertisement, independent of the tool."""
+    first = git("receive-pack", "--advertise-refs", repo).stdout.split(b"\n", 1)[0]
+    return first.split(b"\0", 1)[1].split()
+
+
 def tree_digest(path: Path) -> dict[str, str]:
     """Hash of every file below `path`, including .git internals."""
     return {p.relative_to(path).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
@@ -238,6 +244,12 @@ class GitTestCase(unittest.TestCase):
         path = hooks / name
         path.write_bytes(("#!/bin/sh\n" + body).encode("utf-8"))
         path.chmod(0o755)
+
+    def receiver_config(self, key: str, value: str) -> None:
+        """Configure fixture receivers through the test-owned global file. Git on macOS reads configuration while
+        parsing receive-pack's non-ASCII repository path (every fixture path is one), before it enters that
+        repository, and keeps that cache: settings in the target's own config file are never seen there."""
+        out("config", "--global", key, value)
 
     # --- lifecycle steps through the kernel -----------------------------------------------------
 
