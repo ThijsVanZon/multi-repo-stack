@@ -72,21 +72,21 @@ def _utc(now: datetime | None) -> datetime:
 
 def _destination(remote) -> str:
     """The one explicit destination. Relative paths, remote names and scp-like addresses are ambiguous, and a URL
-    carrying a password would write a credential into the operation record."""
+    carrying a password would write a credential into the operation record. A refused URL is not repeated, since
+    it may carry one."""
     remote = str(remote) if isinstance(remote, (str, Path)) else ""
     if not remote or any(char in remote for char in "\0\r\n"):
-        raise Refused("destination", f"unusable destination {remote!r}")
-    scheme = git.scheme(remote)
-    if scheme is not None:
-        try:
-            parts = urllib.parse.urlsplit(remote)
-            usable = (scheme in _SCHEMES and not parts.query and not parts.fragment and parts.password is None
-                      and (scheme == "file" or bool(parts.hostname)))
-        except ValueError:
-            usable = False
-        if not usable:
-            raise Refused("destination", f"{remote} is not an https, ssh or file URL of one repository, without "
-                                         "a password")
+        raise Refused("destination", "the destination is empty or contains a control character")
+    try:
+        scheme = git.scheme(remote)
+        parts = urllib.parse.urlsplit(remote) if scheme is not None else None
+        usable = parts is None or (scheme in _SCHEMES and not parts.query and not parts.fragment
+                                   and parts.password is None and (scheme == "file" or bool(parts.hostname)))
+    except ValueError:
+        usable = False
+    if not usable:
+        raise Refused("destination", "the destination is not an absolute path, or an https, ssh or file URL of one "
+                                     "repository without a password")
     local = state.local_path(remote)
     if local is None:
         return remote

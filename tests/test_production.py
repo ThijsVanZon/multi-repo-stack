@@ -170,6 +170,35 @@ class ProductionBootstrapTests(RealTargetTestCase):
         out("-C", target, "update-ref", "-d", MAIN, b)
         self.assertEqual(self.checked("push", self.tmp / "op"), "success")
         self.assertEqual(refs(target), {DEV: b})
+
+    def test_malformed_or_password_destinations_are_refused_without_repeating_them(self):
+        """Destinations: a URL that cannot be parsed, and https, ssh and file URLs carrying a dummy password, are
+        refused as destinations by both preparations, with a clear reason that does not repeat the password and no
+        traceback. No operation folder is written and the source is unchanged."""
+        source, b = self.lifecycle_source(name="input source")
+        caller = tree_digest(source)
+        secret = "DUMMY_NOT_A_SECRET"
+        urls = {"unparseable": "https://[unbalanced/owner/app.git",
+                "https password": f"https://user:{secret}@example.invalid/owner/app.git",
+                "ssh password": f"ssh://git:{secret}@example.invalid/owner/app.git",
+                "file password": f"file://user:{secret}@localhost/srv/app.git",
+                "password and newline": f"https://user:{secret}@example.invalid/owner/app.git\n"}
+        for name, url in urls.items():
+            for kind, args in (("bootstrap", ["--source", source, "--commit", b]),
+                               ("release", ["--candidate", b, "--identity", IDENTITY])):
+                with self.subTest(name, kind=kind):
+                    work = self.tmp / f"{name} {kind} op"
+                    proc = subprocess.run([sys.executable, "-I", "-B", str(shared_snapshot()[0] / "mrs"), "prepare",
+                                           kind, "--repository", url, *map(str, args), "--pstack", str(self.pstack()),
+                                           "--work", str(work), "--json"], capture_output=True)
+                    report = json.loads(proc.stdout.decode("utf-8"))
+                    self.assertEqual((proc.returncode, report["status"], proc.stderr), (3, "REFUSED", b""), report)
+                    self.assertTrue(report["reason"].startswith("destination: the destination is "), report)
+                    self.assertNotIn(secret.encode(), proc.stdout + proc.stderr)
+                    self.assertFalse(work.exists())
+        self.assertEqual(tree_digest(source), caller)
+
+
 class ProductionReleaseTests(RealTargetTestCase):
     def test_first_and_later_releases_through_the_commands_keep_exact_identities_and_history(self):
         """First release / Later release / Retries: on a file:// URL target, a SUFFICIENT assessment of exact C
