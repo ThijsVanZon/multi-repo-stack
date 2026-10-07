@@ -4,7 +4,7 @@ A small shared substrate through which agents connect repositories to exact shar
 
 ## Status: production bootstrap and release application
 
-This revision adds the public bootstrap and release operations: prepare, inspect, explicit apply and read-only reconcile. They build on task branches, connection and upgrades, exact-commit acceptance and the local Git transaction kernel. The target repository is active on `dev`. This revision is **not** release 26.1.0, and it has not been accepted.
+This project provides the public bootstrap and release operations: prepare, inspect, explicit apply and read-only reconcile. They build on task branches, connection and upgrades, exact-commit acceptance and the local Git transaction kernel. `dev` beyond the latest release is unreleased work on the line in `VERSION`. A release is an annotated version tag whose embedded receipt is its acceptance record; `mrs inspect --remote <target>` re-validates and lists each one.
 
 Implemented and exercised by tests against disposable local repositories:
 
@@ -55,8 +55,8 @@ Deliberate limits:
 - The tool cannot see a provider's own rules, such as branch protection, rulesets or hidden refs. It reports the push and the state it observes afterwards; it neither bypasses nor detects provider policy in advance.
 - The collector cannot run agent-integration or provider checks. They reach acceptance only through the non-author verdict, which accepts or rejects each reused observation.
 - This is trusted-repository execution, not a sandbox: checks run with the collector's permissions and environment, minus Git variables that would redirect them to another repository. Refusing escaping tracked links keeps ordinary build output inside the checkout; a command can still write anywhere its permissions allow. Evidence ownership is checked on POSIX only.
-- Not proved: how a provider such as GitHub handles the guarded release push (atomicity, lease rejection, races and protections). The tests use local Git repositories only.
-- This revision was exercised by its author only on Windows 11 with Git 2.37.3.windows.1 and Python 3.11.0. Hosted CI records describe only the commits they name. Linux, macOS, agent-integration and provider gates remain open for this revision.
+- Provider behavior (atomicity, lease rejection, races and protections) is established only as far as a release's verdict records it; the tests use local Git repositories only.
+- Evidence binds exact commits. A release's receipt holds its runtime records, with each runner's OS, Python and Git, and its verdict with the accepted limitations. Hosted CI records describe only the commits they name. A later commit is covered by none of it until its own release.
 
 ## Use
 
@@ -109,7 +109,7 @@ Tests and the recipe for this project's own records: see `docs/verification.md`.
 - `AGENTS.md` is the agent entrypoint. `docs/` holds the routed instructions, the verification recipe and the connection and upgrade procedures.
 - `.github/workflows/checks.yml` is the prepared read-only CI.
 - `multi-repo-stack.json` is the single selector: repository identity, applicability, the pinned canonical pstack, and this project's own check criteria.
-- `VERSION` holds the active line, `26.1.0`.
+- `VERSION` holds the active line.
 - `mrs/` is the tool. `tests/` holds the disposable-fixture tests; `tests/consumers/` holds the tiny consumer shapes they build.
 
 ## License

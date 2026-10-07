@@ -10,11 +10,11 @@ Method: read these from the pstack checkout that preflight verified:
 
 You need:
 
-- Python 3.11 or newer, available as `python` on PATH;
+- Python 3.11 or newer. Commands here call it `python`; use your interpreter's name (for example `python3`). The `suite` check is declared as `python`, so `collect` needs that name on PATH;
 - Git on PATH;
 - a clean, byte-exact checkout of the pinned cursor/plugins commit. Clone it with `git clone --config core.autocrlf=false`, then check out the pinned commit.
 
-From this directory, `python -I -B mrs preflight --pstack <that checkout>` must print `PREFLIGHT OK`. No minimum Git version is claimed; this revision was exercised with Git 2.37.3.windows.1.
+From this directory, `python -I -B mrs preflight --pstack <that checkout>` must print `PREFLIGHT OK`. Git older than 2.30 lacks options the tool uses (`rev-parse --end-of-options`, `push --no-force-if-includes`). Preflight prints the Git and Python it ran with; the versions exercised are those in each record's runner facts.
 
 ## Suite
 
@@ -24,7 +24,7 @@ From this directory, set `MRS_PSTACK_CHECKOUT` to the pstack checkout, then run:
 python -I -B tests
 ```
 
-This is unittest discovery over `tests/`, and it is this project's declared `suite` check. Without `MRS_PSTACK_CHECKOUT`, the selection tests fail rather than skip.
+This is unittest discovery over `tests/`, and it is this project's declared `suite` check. Without `MRS_PSTACK_CHECKOUT`, the selection tests fail rather than skip. While iterating, rerun one module with `python -I -B -m unittest discover -s tests -t . -p test_<name>.py`; under `-I`, `-m unittest tests.test_<name>` cannot import `tests`. Only a full run is check evidence.
 
 ## This project's exact-commit record
 
@@ -55,7 +55,7 @@ The scratch repository's `dev` is a local mapping of the commit under test, made
 
 - **Pull requests** get task evidence. A `task` job runs `mrs task check` for the PR's head commit against the target's current state. Each row checks out the head commit, never GitHub's synthetic merge commit, and runs preflight and the suite. It keeps the runner facts, the preflight output and the suite summary. None of this is a record of an integrated C.
 - **Pushes to `dev`** get integrated evidence. Each row runs `mrs collect` against the target itself, from a checkout of the pushed commit. If `dev` has moved on by then, collection refuses, because this checkout is no longer the observed `dev`; the later push's run covers the new commit. A record names its candidate, so a later `dev` never relabels it.
-- **Retain the records.** Artifacts and logs expire. Download each row's `record.json` (for example `gh run download <run> --name <artifact>`) and keep it with the release evidence. Acceptance still needs passing records from all three OSes for the same commit, and the non-author verdict.
+- **Retain the records.** Artifacts and logs expire after at most 90 days on a public repository. `gh run download <run> --dir <folder>` fetches every row's `record.json` and its private log; keep both outside every checkout. `assess` and `prepare release` read only the records (`--record`). A release's tag receipt then carries every record it was assessed with, including each log's size and SHA-256, but not the logs themselves. Acceptance still needs passing records from all three OSes for the same commit, and the non-author verdict.
 - A green PR run describes the target when it ran. CI is not a lock, and it proves nothing about GitHub's atomic release behavior. Check the task again immediately before landing.
 
 ## Evidence
@@ -78,10 +78,10 @@ Each test's docstring names the contract row it exercises. Every assertion reads
 - Their verdicts are SIMULATED attestations written by test code.
 - Low-level transaction tests use bare repositories marked as disposable fixtures. The production tests (`tests/test_production.py`) use unmarked bare repositories and `file://` URLs as real targets, through the public `prepare` and `operation` commands, and through direct library calls, run from a clean checkout of the source under test.
 
-## First-release gates this project keeps open
+## Release gates
 
 - **Runtime:** a passing `suite` record from native Windows, Linux and macOS for the same exact commit. The read-only workflow above is the intended route.
-- **Agent integration:** fresh `AGENTS.md` entry in each of these:
+- **Agent integration:** an `AGENTS.md` entry observation in each of these, fresh, or reused only where the non-author verdict accepts its recorded applicability:
   - Claude Code on native Windows;
   - Claude Code on native macOS;
   - Codex in the Linux/cloud environment.
