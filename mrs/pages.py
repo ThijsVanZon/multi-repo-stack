@@ -107,7 +107,7 @@ def credential() -> str:
     if gh is None or Path(gh).suffix.lower() in (".bat", ".cmd"):
         raise Stop("UNKNOWN", "credential", "gh is not on PATH; the token comes from `gh auth token`")
     try:
-        got = subprocess.run([gh, "auth", "token", "--hostname", API_HOST], capture_output=True, timeout=TIMEOUT)
+        got = subprocess.run([gh, "auth", "token", "--hostname", API_HOST], capture_output=True, timeout=60)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise Stop("UNKNOWN", "credential", f"gh auth token could not run ({type(exc).__name__})") from None
     found = _TOKEN.fullmatch(got.stdout) if got.returncode == 0 else None

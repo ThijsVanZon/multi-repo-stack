@@ -193,7 +193,9 @@ class TransportQualificationTests(PageTestCase):
             probe.bind(("127.0.0.1", 0))
             dead = f"http://127.0.0.1:{probe.getsockname()[1]}"
         refused = pages.call(dead, SYNTHETIC_TOKEN, "POST", f"/repos/{SLUG}/releases", b"{}")
-        self.assertEqual((refused.status, refused.failure), (None, "ConnectionRefusedError"))
+        # Windows retries a refused loopback connect, so there the shortened timeout may end it first.
+        self.assertEqual(refused.status, None)
+        self.assertIn(refused.failure, ("ConnectionRefusedError", "TimeoutError"))
         with self.assertRaises(Stop):
             pages.read(dead, SYNTHETIC_TOKEN, "/user", "visibility")
 
