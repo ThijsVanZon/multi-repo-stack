@@ -355,6 +355,8 @@ class PageBindingTests(PageScenarioTestCase):
             "page.json title": {"page.json": pages._json({**record, "title": "Another title"})},
             "page.json key order": {"page.json": json.dumps(dict(reversed(record.items())), indent=2).encode() + b"\n"},
             "page.json repository": {"page.json": pages._json({**record, "repository": "other/app"})},
+            "page.json routed elsewhere": {"page.json": pages._json(
+                {**record, "api": pages.API, "destination": "https://github.com/other/app"})},
             "page.json tag object": {"page.json": pages._json({**record, "tag_object": record["candidate"]})},
             "request.json": {"request.json": (work / "request.json").read_bytes().replace(b'"false"', b'"true"')},
             "notes.md": {"notes.md": notes},
@@ -454,8 +456,9 @@ class PageClassificationTests(PageScenarioTestCase):
         self.releases(150)
         repo, first, second = f"GET /repos/{SLUG}", f"GET {LISTING}1", f"GET {LISTING}2"
         cases = {
-            "duplicate keys": ({repo: answer("200 OK", b'{"full_name": "example/app", "full_name": "x"}')},
-                               "provider"),
+            "duplicate keys": ({repo: answer("200 OK", b'{"full_name": "other/app", "full_name": "example/app", '
+                                             b'"html_url": "https://github.com/example/app", "permissions": '
+                                             b'{"push": true}}')}, "provider"),
             "NaN": ({first: answer("200 OK", b"[NaN]")}, "listing"),
             "BOM": ({"GET /user": answer("200 OK", b'\xef\xbb\xbf{"login": "fixture-owner"}',
                                          "X-OAuth-Scopes: repo")}, "visibility"),
