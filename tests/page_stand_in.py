@@ -1,11 +1,12 @@
-"""A loopback stand-in for the GitHub REST endpoints `mrs page` uses, and the gh environment that reaches it (test
-code; it models only what is written here, never GitHub itself).
+"""A loopback stand-in for the GitHub REST endpoints `mrs page` uses, and the gh environment that supplies its
+credential in tests (test code; it models only what is written here, never GitHub itself).
 
 It serves `GET /user`, `GET /repos/<slug>`, the paginated `GET /repos/<slug>/releases` and
-`POST /repos/<slug>/releases` from scripted state, and records every request on the wire: method, path, query,
-headers and exact body bytes (chunked bodies decoded). `post` scripts the create's answer, `raw` replaces any
-answer with exact bytes, and `on_listing` and `on_post` run a scripted action, such as a Git change on the
-disposable destination, when that request arrives.
+`POST /repos/<slug>/releases` from scripted state. It counts connections and records every request on the wire:
+method, path, query, headers, exact body bytes and the connection it came on. `post` scripts the create's
+answer; `raw` replaces the answer to one request with exact bytes, a dropped connection or a stall; `on_listing`
+and `on_post` run a scripted action, such as a Git change on the disposable destination, when that request
+arrives.
 """
 
 from __future__ import annotations
@@ -19,9 +20,11 @@ from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-# Answers to the create. "-stored" variants store the page before answering; "drop" closes without an answer,
-# "stall" never answers and a redirect points back at the same path. Only "201" and "-stored" store a page.
-POSTS = ("201", "422", "500", "500-stored", "drop", "drop-stored", "stall", "301", "302", "307", "308")
+# Answers to the create: "-stored" variants store the page first, "drop" closes without an answer, "stall" never
+# answers, and a 3xx redirects to `redirect_to` (default: the same URL). Only "201" and "-stored" store a page;
+# "422" answers with `refusal` as its message.
+POSTS = ("201", "422", "500", "500-stored", "drop", "drop-stored", "stall", "301", "302", "303", "307", "308")
+DROP, STALL = "drop", "stall"
 
 
 @dataclass(frozen=True)
@@ -31,6 +34,18 @@ class Request:
     query: str
     headers: dict[str, str]  # lowercased names
     body: bytes
+    connection: int  # the client's port: one value per connection
+
+
+class _Server(ThreadingHTTPServer):
+    daemon_threads = True
+
+    def process_request(self, request, client_address):
+        self.stand_in.connections += 1
+        super().process_request(request, client_address)
+
+    def handle_error(self, request, client_address):  # a client that stops reading is a scripted case
+        pass
 
 
 class StandIn:
@@ -39,14 +54,14 @@ class StandIn:
         self.slug, self.login, self.scopes, self.push, self.page_size = slug, login, scopes, push, page_size
         self.full_name = slug
         self.releases: list[dict] = []
-        self.post = "201"
-        self.raw: dict[str, bytes] = {}  # "GET /path?query" or "POST /path" -> exact response bytes
-        self.next_origin: str | None = None  # serve rel="next" links on another origin
+        self.post, self.redirect_to, self.refusal = "201", None, "Validation Failed"
+        self.raw: dict[str, bytes | str] = {}  # "GET /path?query" or "POST /path" -> exact bytes, DROP or STALL
+        self.next_origin: str | None = None  # serve rel="next" links naming another origin
         self.on_listing = self.on_post = None
         self.wire: list[Request] = []
+        self.connections = 0
         self._released = threading.Event()
-        self._server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
-        self._server.daemon_threads = True
+        self._server = _Server(("127.0.0.1", 0), _Handler)
         self._server.stand_in = self
         self.base = f"http://127.0.0.1:{self._server.server_address[1]}"
         threading.Thread(target=self._server.serve_forever, daemon=True).start()
@@ -58,7 +73,7 @@ class StandIn:
 
     def page(self, tag: str, body: str, **changes) -> dict:
         """A stored release as the listing shows it."""
-        record = {"id": 1000 + len(self.releases), "tag_name": tag, "name": f"example/app {tag}", "body": body,
+        record = {"id": 1000 + len(self.releases), "tag_name": tag, "name": f"{self.slug} {tag}", "body": body,
                   "draft": False, "prerelease": False, "assets": [],
                   "html_url": f"https://github.com/{self.slug}/releases/tag/{tag}", **changes}
         self.releases.append(record)
@@ -66,6 +81,15 @@ class StandIn:
 
     def posts(self) -> list[Request]:
         return [request for request in self.wire if request.method != "GET"]
+
+
+def redirect(code: int, location: str) -> bytes:
+    return f"HTTP/1.1 {code} Moved\r\nLocation: {location}\r\nContent-Length: 0\r\n\r\n".encode("ascii")
+
+
+def answer(status: str, body: bytes, *headers: str) -> bytes:
+    head = [f"HTTP/1.1 {status}", f"Content-Length: {len(body)}", "Content-Type: application/json", *headers]
+    return ("\r\n".join(head) + "\r\n\r\n").encode("ascii") + body
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -95,11 +119,21 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _end(self, how) -> None:
+        """Drop the connection, stall until the stand-in closes, or write exact bytes."""
+        if how == DROP:
+            self.connection.shutdown(socket.SHUT_RDWR)
+        elif how == STALL:
+            self.server.stand_in._released.wait()
+        else:
+            self.wfile.write(how)
+        self.close_connection = True
+
     def _handle(self) -> None:
         stand_in: StandIn = self.server.stand_in
         parts = urllib.parse.urlsplit(self.path)
         request = Request(self.command, parts.path, parts.query, {k.lower(): v for k, v in self.headers.items()},
-                          self._body())
+                          self._body(), self.client_address[1])
         stand_in.wire.append(request)
         key = f"{self.command} {parts.path}" + (f"?{parts.query}" if parts.query else "")
         releases = f"/repos/{stand_in.slug}/releases"
@@ -108,8 +142,7 @@ class _Handler(BaseHTTPRequestHandler):
         if self.command == "POST" and parts.path == releases and stand_in.on_post:
             stand_in.on_post()
         if key in stand_in.raw:
-            self.wfile.write(stand_in.raw[key])
-            self.close_connection = True
+            self._end(stand_in.raw[key])
         elif self.command == "GET" and parts.path == "/user":
             self._send(200, {"login": stand_in.login},
                        {} if stand_in.scopes is None else {"X-OAuth-Scopes": stand_in.scopes})
@@ -139,24 +172,22 @@ class _Handler(BaseHTTPRequestHandler):
         if mode == "201":
             self._send(201, stored)
         elif mode == "422":
-            self._send(422, {"message": "Validation Failed"})
+            self._send(422, {"message": stand_in.refusal})
         elif mode in ("500", "500-stored"):
             self._send(500, {"message": "Server Error"})
         elif mode in ("drop", "drop-stored"):
-            self.connection.shutdown(socket.SHUT_RDWR)
-            self.close_connection = True
+            self._end(DROP)
         elif mode == "stall":
-            stand_in._released.wait()
-            self.close_connection = True
+            self._end(STALL)
         else:
-            self._send(int(mode), {"message": "Moved"}, {"Location": f"{stand_in.base}{self.path}"})
+            self._end(redirect(int(mode), stand_in.redirect_to or f"{stand_in.base}{self.path}"))
 
     do_GET = do_POST = do_PATCH = do_DELETE = _handle
 
 
 class DeadProxy:
-    """The proxy every gh request is pointed at: it accepts and closes, so nothing it receives goes anywhere,
-    and it counts every connection, so a test can show that no request left loopback."""
+    """The proxy every proxy variable points at in page tests: it accepts and closes, so nothing it receives goes
+    anywhere, and it counts every connection, so a test can show that no request left for it."""
 
     def __init__(self) -> None:
         self.connections = 0
@@ -177,15 +208,15 @@ class DeadProxy:
         self._socket.close()
 
 
-DUMMY_TOKEN = "gho_fixtureDummyTokenNotACredential0000000"
+SYNTHETIC_TOKEN = "gho_SyntheticFixtureToken0000000000000000"
 
 
 def gh_environment(config: Path, proxy: str) -> dict[str, str]:
-    """The environment gh runs with in page tests: an empty configuration, a dummy token, every proxy variable
-    pointed at the dead proxy and no ambient GitHub host or credential."""
+    """The environment of page tests: gh with an empty configuration and a synthetic token is the credential
+    source, every proxy variable points at the dead proxy, and no ambient GitHub host or credential remains."""
     env = {key: value for key, value in os.environ.items()
            if not key.upper().startswith(("GH_", "GITHUB_")) and key.upper() not in
            ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY")}
-    env.update(GH_CONFIG_DIR=str(config), GH_TOKEN=DUMMY_TOKEN, GH_PROMPT_DISABLED="1", GH_NO_UPDATE_NOTIFIER="1",
-               HTTP_PROXY=proxy, HTTPS_PROXY=proxy, ALL_PROXY=proxy)
+    env.update(GH_CONFIG_DIR=str(config), GH_TOKEN=SYNTHETIC_TOKEN, GH_PROMPT_DISABLED="1",
+               GH_NO_UPDATE_NOTIFIER="1", HTTP_PROXY=proxy, HTTPS_PROXY=proxy, ALL_PROXY=proxy, NO_PROXY="")
     return env
