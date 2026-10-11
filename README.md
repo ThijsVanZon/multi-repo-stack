@@ -44,23 +44,26 @@ Implemented and exercised by tests against disposable local repositories:
   - **Bindings.** A bootstrap may only create `dev` at B. A release may only move `main` from P (or absence) to C, create tag N at T and move `dev` from C to D, and its other facts must match T's validated receipt, including the identity of its acceptance. The store also binds the operation's kind, destination, expected values (including P or an absent `main`, as observed at preparation) and the identity of the tool that prepared it. Inspect, apply, the push and reconciliation, called through the commands or the library, refuse a record that differs from the prepared objects or that binding, and a running tool other than the one that prepared it. A real target also needs that tool to be a clean committed checkout. Nothing is repaired or regenerated: T and D keep their identities across retries.
   - **Destinations** are one absolute path to a local bare repository, or an https, ssh or file URL without a password. Relative paths, remote names, scp-like addresses and URLs that cannot be parsed are refused, and the reason does not repeat a refused destination, since it may carry a credential. Before every observation, fetch and push, Git itself must resolve the destination to exactly itself, and the transport may use only the destination's own protocol.
   - **Receipts.** Observers re-validate an assessed receipt whenever they read the tag. They apply the same record validation, against what C provides (its criteria, its shared pin and, when C pins pstack itself, that pin) and against the retained release history (the previous release's criteria, or none at a first release). An observer has neither the shared revision a consumer selects nor a pstack checkout. It therefore checks a consumer's pstack pin, and every pstack tree, only for form and for agreement across records.
+- **Release pages** (`mrs page`; `mrs/pages.py`), notes only, for a contract release N on a `https://github.com/<owner>/<name>` target. `page prepare` reads Git only and seals the exact notes, the one create request (`make_latest` "false", no assets, no generated notes) and the bound principal into a new operation folder; the SHA-256 of its `page.json` is the digest a grant names. `page apply` sends that request at most once, over its own direct HTTPS transport to `api.github.com` (fixed request targets, no redirect, retry, proxy or connection reuse), with the token from `gh auth token --hostname github.com` held in memory only. Its exclusive claim spends the operation whatever the answer; nothing resends. `page reconcile` only reads. Only tag N and N's page decide: COMPLETED, NOT_APPLIED, DIVERGED or UNKNOWN. Absence counts only for the bound principal with the `repo` scope and push access, and any unqualified read is UNKNOWN, never absence.
 
 **Hosted CI** (`.github/workflows/checks.yml`) has read-only permissions and runs on Linux, Windows and macOS with Python 3.11. Pull requests get task evidence for their head commit. Pushes to `dev` get an exact-commit record of the target's observed `dev`. See `docs/verification.md`.
 
 Deliberate limits:
 
-- Only `operation apply` changes a target, and only as prepared. `task create` adds one new branch, and the objects it needs, to the caller's local checkout; `prepare` writes only its new operation folder; nothing else writes outside its own scratch. Any destination rewrite, including an empty `insteadOf`/`pushInsteadOf` prefix in whichever configuration file holds it, or a remote named like the destination, is refused. Configuration that Git cannot read is UNKNOWN.
+- Only `operation apply` changes a target's refs, and only as prepared; `page apply` creates only its one Release page. `task create` adds one new branch, and the objects it needs, to the caller's local checkout; `prepare` writes only its new operation folder; nothing else writes outside its own scratch. Any destination rewrite, including an empty `insteadOf`/`pushInsteadOf` prefix in whichever configuration file holds it, or a remote named like the destination, is refused. Configuration that Git cannot read is UNKNOWN.
 - Pushes come from the operation's own bare store, so submodule recursion has no submodule repository to act on. `--recurse-submodules=no` is defense in depth there, not a separately demonstrable guard.
 - The low-level `prepare_release` records an unjudged payload for the transaction tests, and refuses one that claims the assessed format. It accepts only disposable fixtures: local bare repositories carrying the `mrs-disposable-fixture` marker, which only test code creates. Observers still recognize such receipts.
 - The tool cannot see a provider's own rules, such as branch protection, rulesets or hidden refs. It reports the push and the state it observes afterwards; it neither bypasses nor detects provider policy in advance.
 - The collector cannot run agent-integration or provider checks. They reach acceptance only through the non-author verdict, which accepts or rejects each reused observation.
 - This is trusted-repository execution, not a sandbox: checks run with the collector's permissions and environment, minus Git variables that would redirect them to another repository. Refusing escaping tracked links keeps ordinary build output inside the checkout; a command can still write anywhere its permissions allow. Evidence ownership is checked on POSIX only.
 - Provider behavior (atomicity, lease rejection, races and protections) is established only as far as a release's verdict records it; the tests use local Git repositories only.
+- **Release pages: tag-disappearance race, unsolved.** If tag N is deleted between apply's classification and its create, GitHub may create a lightweight tag N at C. The tool reports DIVERGED (tag) afterwards and repairs nothing, but cannot prevent it. No real `page apply` is authorized until this is resolved or explicitly accepted.
+- **Release pages: live behavior unproven.** The tests use loopback stand-ins only. Draft visibility on the `repo`-scope path, byte-exact bodies, `make_latest` "false" and GitHub's answers to redirects and pagination are unobserved; a redirect is UNKNOWN, never followed. TLS uses Python's default trust store, and proxies are unsupported: an unverifiable trust store or a proxied-only network gives UNKNOWN. The token gh prints is trusted beyond the login and scope checks. The listing is read page by page, so a release shifting across pages between reads can be missed. Other state is sampled, not locked. The claim is a local file without a folder fsync on Windows, and an operator who deletes it and reruns is outside the grant. The tag read inherits the existing Git redirect behavior. Publishing can trigger release workflows, which the tool does not check.
 - Evidence binds exact commits. A release's receipt holds its runtime records, with each runner's OS, Python and Git, and its verdict with the accepted limitations. Hosted CI records describe only the commits they name. A later commit is covered by none of it until its own release.
 
 ## Use
 
-Requires Python 3.11 or newer and Git on PATH. Only the standard library is used. Run the tool from the selected checkout with an explicit interpreter, without relying on shebangs:
+Requires Python 3.11 or newer and Git on PATH; `page apply` and `page reconcile` also need gh, as the credential source. Only the standard library is used. Run the tool from the selected checkout with an explicit interpreter, without relying on shebangs:
 
 ```text
 python -I -B <shared checkout>/mrs preflight --consumer <consumer checkout> --pstack <cursor/plugins checkout at the pinned commit> [--json] [--expect <earlier --json output>]
@@ -72,6 +75,9 @@ python -I -B <shared checkout>/mrs task check --repository <path or URL> [--chec
 python -I -B <shared checkout>/mrs prepare bootstrap --repository <path or URL> --source <local repository> --commit <B> --pstack <pstack checkout> --work <new folder> [--json]
 python -I -B <shared checkout>/mrs prepare release --repository <path or URL> --candidate <C> --pstack <pstack checkout> --record <record file> [--record ...] --attestation <verdict file> [--reuse <proposals file>] --identity "<Name> <email>" --work <new folder> [--json]
 python -I -B <shared checkout>/mrs operation inspect|apply|reconcile --work <operation folder> [--json]
+python -I -B <shared checkout>/mrs page prepare --repository https://github.com/<owner>/<name> --tag <N> --title "<title>" --notes <file> --principal <login> --work <new folder> [--json]
+python -I -B <shared checkout>/mrs page apply --work <folder> --operation-sha256 <granted digest> [--json]
+python -I -B <shared checkout>/mrs page reconcile --work <folder> [--json]
 ```
 
 Exit codes:
@@ -84,7 +90,9 @@ Exit codes:
 - `5`: the selection changed during a run.
 - `6`: mixed: the target holds part of the operation; stop and have a repair reviewed separately.
 
-Only `operation apply` writes to a target. `collect` writes only its record and logs, `task create` only its new branch into your checkout, and `prepare` only its new operation folder.
+Page commands use the same codes: `0` PREPARED, COMPLETED, APPLIED or NOOP; `1` NOT_APPLIED; `3` REFUSED or DIVERGED; `4` UNKNOWN.
+
+Only `operation apply` writes to a target, and only `page apply` creates a Release page. `collect` writes only its record and logs, `task create` only its new branch into your checkout, and `prepare` and `page prepare` only their new operation folder.
 
 **The verdict file** is JSON in the `multi-repo-stack/attestation/1` format. Its keys:
 

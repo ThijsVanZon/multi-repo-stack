@@ -1,6 +1,8 @@
-"""Commands: preflight, inspect, collect, assess, task, prepare and operation. Only `operation apply` publishes:
-it applies one prepared bootstrap or release to its target. `prepare` writes only a new operation folder, `task
-create` adds one new branch to the caller's local checkout, and everything else is read-only toward targets."""
+"""Commands: preflight, inspect, collect, assess, task, prepare, operation and page. Only `operation apply`
+publishes lifecycle refs: it applies one prepared bootstrap or release to its target. Only `page apply` creates a
+GitHub Release page: the one create of one prepared page operation. `prepare` and `page prepare` write only a new
+operation folder, `task create` adds one new branch to the caller's local checkout, and everything else is
+read-only toward targets."""
 
 from __future__ import annotations
 
@@ -11,7 +13,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from . import acceptance, collect, git, sources, state, tasks, transactions
+from . import acceptance, collect, git, pages, sources, state, tasks, transactions
 
 OK, NOT_PASSED, REFUSED, UNKNOWN, INVALIDATED, MIXED = 0, 1, 3, 4, 5, 6
 _remove = collect.remove_tree
@@ -299,10 +301,41 @@ def _operation(args) -> int:
     return code
 
 
+def _page(args) -> int:
+    work = _work(args.work)
+    try:
+        if args.page_command == "prepare":
+            digest, record = pages.prepare(destination=args.repository, tag=args.tag, title=args.title,
+                                           notes=Path(args.notes), principal=args.principal, work=work)
+            report = {"status": "PREPARED", "reason": "prepared", "operation_sha256": digest,
+                      "detail": f"nothing was sent; only `mrs page apply --work {work} --operation-sha256 {digest}` "
+                                "creates the page", "tag_object": record["tag_object"],
+                      "candidate": record["candidate"], "request_sha256": record["request_sha256"]}
+        elif args.page_command == "apply":
+            report = pages.apply(work, args.operation_sha256)
+        else:
+            report = pages.reconcile(work)
+    except pages.Stop as exc:
+        report = {"status": exc.status, "reason": exc.reason, "detail": exc.detail}
+    except OSError as exc:
+        report = {"status": "REFUSED", "reason": "io", "detail": str(exc)}
+    if args.page_command != "prepare":
+        report["attempt"] = pages.attempt(work)
+    page = report.get("page") or {}
+    _print(report, args.json, [f"PAGE {args.page_command.upper()} {report['status']} ({report['reason']}): "
+                               f"{report['detail']}",
+                               *[f"{key:<9} {report[key]}" for key in ("operation_sha256", "tag_object", "candidate",
+                                                                       "request_sha256", "attempt") if key in report],
+                               *([f"page      {page['id']} {page['html_url']}"] if page else [])])
+    return {"PREPARED": OK, "COMPLETED": OK, "APPLIED": OK, "NOOP": OK, "NOT_APPLIED": NOT_PASSED,
+            "UNKNOWN": UNKNOWN}.get(report["status"], REFUSED)
+
+
 def main(argv: list[str] | None = None) -> int:
     for stream in (sys.stdout, sys.stderr):  # paths may be non-ASCII; never depend on the console code page
         stream.reconfigure(encoding="utf-8", errors="backslashreplace")
-    parser = argparse.ArgumentParser(prog="mrs", description="multi-repo-stack (only `operation apply` publishes)")
+    parser = argparse.ArgumentParser(prog="mrs", description="multi-repo-stack (only `operation apply` publishes "
+                                                             "refs; only `page apply` creates a Release page)")
     commands = parser.add_subparsers(dest="command", required=True)
     pre = commands.add_parser("preflight", help="verify the consumer selection and selected shared/pstack checkouts")
     pre.add_argument("--consumer", default=".", help="consumer checkout root (default: current directory)")
@@ -372,5 +405,22 @@ def main(argv: list[str] | None = None) -> int:
         sub.add_argument("--work", required=True, help="the operation folder that prepare wrote")
         sub.add_argument("--json", action="store_true")
     operation.set_defaults(handler=_operation)
+    page = commands.add_parser("page", help="prepare, apply or reconcile a notes-only GitHub Release page")
+    page_commands = page.add_subparsers(dest="page_command", required=True)
+    new_page = page_commands.add_parser("prepare", help="seal one page create in a new folder; reads Git only")
+    new_page.add_argument("--repository", required=True, help="the release's target, https://github.com/<owner>/<name>")
+    new_page.add_argument("--tag", required=True, help="N, a contract release on the target")
+    new_page.add_argument("--title", required=True, help="the page title, one line")
+    new_page.add_argument("--notes", required=True, help="the exact notes: UTF-8, LF only, non-empty")
+    new_page.add_argument("--principal", required=True, help="the GitHub login whose access may decide absence")
+    for name, text in (("prepare", None), ("apply", "send the one create of the granted operation; never resends"),
+                       ("reconcile", "classify the page against the operation; read-only")):
+        sub = new_page if name == "prepare" else page_commands.add_parser(name, help=text)
+        sub.add_argument("--work", required=True, help="new operation folder, outside any Git checkout"
+                         if name == "prepare" else "the folder that page prepare wrote")
+        if name == "apply":
+            sub.add_argument("--operation-sha256", required=True, help="the granted operation digest")
+        sub.add_argument("--json", action="store_true")
+    page.set_defaults(handler=_page)
     args = parser.parse_args(argv)
     return args.handler(args)
