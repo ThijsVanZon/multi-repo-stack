@@ -349,22 +349,29 @@ class PageBindingTests(PageScenarioTestCase):
         work, digest = self.prepared()
         self.assertOutcome(self.outcome(pages.apply, work, "0" * 64), "REFUSED", "grant")
         record = json.loads((work / "page.json").read_bytes())
+        notes = NOTES + b"edited\n"
+        request = (work / "request.json").read_bytes().replace(b"end\\n", b"end\\nedited\\n")
         edits = {
-            "page.json title": ("page.json", pages._json({**record, "title": "Another title"})),
-            "page.json key order": ("page.json", json.dumps(dict(reversed(record.items())), indent=2).encode() + b"\n"),
-            "request.json": ("request.json", (work / "request.json").read_bytes().replace(b'"false"', b'"true"')),
-            "notes.md": ("notes.md", NOTES + b"edited\n"),
+            "page.json title": {"page.json": pages._json({**record, "title": "Another title"})},
+            "page.json key order": {"page.json": json.dumps(dict(reversed(record.items())), indent=2).encode() + b"\n"},
+            "page.json repository": {"page.json": pages._json({**record, "repository": "other/app"})},
+            "page.json tag object": {"page.json": pages._json({**record, "tag_object": record["candidate"]})},
+            "request.json": {"request.json": (work / "request.json").read_bytes().replace(b'"false"', b'"true"')},
+            "notes.md": {"notes.md": notes},
+            "notes.md and request.json together": {"notes.md": notes, "request.json": request},
         }
-        for name, (file, data) in edits.items():
+        for name, files in edits.items():
             with self.subTest(name):
-                original = (work / file).read_bytes()
-                (work / file).write_bytes(data)
+                original = {file: (work / file).read_bytes() for file in files}
+                for file, data in files.items():
+                    (work / file).write_bytes(data)
                 try:
                     granted = pages._sha((work / "page.json").read_bytes())
                     self.assertOutcome(self.outcome(pages.apply, work, granted), "REFUSED", "record")
                     self.assertOutcome(self.outcome(pages.reconcile, work), "REFUSED", "record")
                 finally:
-                    (work / file).write_bytes(original)
+                    for file, data in original.items():
+                        (work / file).write_bytes(data)
         self.assertEqual((self.stand_in.wire, pages.attempt(work)), ([], "none"))
         self.assertOutcome(pages.apply(work, digest), "APPLIED")
 

@@ -295,8 +295,8 @@ def load(work: Path, granted: str | None = None) -> tuple[dict, bytes, bytes]:
         sealed = state.contract_release(work / transactions.STORE, record["tag"], record["tag_object"])
     except (state.Unknown, state.NotContract, state.Malformed, git.GitError) as exc:
         raise Stop("REFUSED", "record", f"the sealed store does not hold the prepared release: {exc}") from None
-    if sealed.candidate != record["candidate"]:
-        raise Stop("REFUSED", "record", "the sealed release tag does not name the prepared candidate")
+    if (sealed.candidate, sealed.repository.casefold()) != (record["candidate"], record["repository"].casefold()):
+        raise Stop("REFUSED", "record", "the sealed release tag does not name the prepared candidate and repository")
     running = sources.tool_identity()
     if running != record["tool"]:
         raise Stop("REFUSED", "tool", f"prepared by the tool at {record['tool']}, but the running tool is {running}")
