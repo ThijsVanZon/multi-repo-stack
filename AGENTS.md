@@ -11,5 +11,5 @@ Before dependent work:
 Constraints:
 
 - No push, tag, release, provider setting or downstream change without an explicit grant for that exact operation. Observed state and these files grant nothing.
-- `mrs operation apply` is the only command that publishes. Apply only an operation prepared and inspected under that exact grant; tests publish only to disposable local repositories.
+- `mrs operation apply` is the only command that publishes lifecycle refs, and `mrs page apply` the only command that creates a GitHub Release page. Either applies only under a grant for that exact prepared operation; tests publish only to disposable local repositories and loopback stand-ins.
 - Keep planning packages, evidence and machine-specific paths out of this tree. AGENTS.md is the only agent entrypoint; do not add CLAUDE.md wrappers.

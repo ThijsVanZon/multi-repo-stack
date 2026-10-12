@@ -12,6 +12,7 @@ You need:
 
 - Python 3.11 or newer. Commands here call it `python`; use your interpreter's name (for example `python3`). The `suite` check is declared as `python`, so `collect` needs that name on PATH;
 - Git on PATH;
+- gh on PATH, used only as the credential source of `mrs page` (`gh auth token --hostname github.com`). The page tests fail without it;
 - a clean, byte-exact checkout of the pinned cursor/plugins commit. Clone it with `git clone --config core.autocrlf=false`, then check out the pinned commit.
 
 From this directory, `python -I -B mrs preflight --pstack <that checkout>` must print `PREFLIGHT OK`. Git older than 2.30 lacks options the tool uses (`rev-parse --end-of-options`, `push --no-force-if-includes`). Preflight prints the Git and Python it ran with; the versions exercised are those in each record's runner facts.
@@ -24,7 +25,7 @@ From this directory, set `MRS_PSTACK_CHECKOUT` to the pstack checkout, then run:
 python -I -B tests
 ```
 
-This is unittest discovery over `tests/`, and it is this project's declared `suite` check. Without `MRS_PSTACK_CHECKOUT`, the selection tests fail rather than skip. While iterating, rerun one module with `python -I -B -m unittest discover -s tests -t . -p test_<name>.py`; under `-I`, `-m unittest tests.test_<name>` cannot import `tests`. Only a full run is check evidence.
+This is unittest discovery over `tests/`, and it is this project's declared `suite` check. Without `MRS_PSTACK_CHECKOUT`, the selection tests fail rather than skip. While iterating, rerun one module with `python -I -B -m unittest discover -s tests -t . -p test_<name>.py`; under `-I`, `-m unittest tests.test_<name>` cannot import `tests`. Only a full run is check evidence. The page tests (`-p test_pages.py`) run within the suite and need no network, real credential or gh login.
 
 ## This project's exact-commit record
 
@@ -76,6 +77,7 @@ Each test's docstring names the contract row it exercises. Every assertion reads
   - a research shape that checks a synthetic result;
   - a probe shape for the collection boundaries.
 - Their verdicts are SIMULATED attestations written by test code.
+- Page tests (`tests/page_stand_in.py`) send every provider request to a loopback stand-in of the four GitHub endpoints. It records the wire they assert on: method, target, headers, exact body bytes and connection. A second stand-in plays another origin, and a counting dead proxy sits behind every proxy variable; neither may receive anything. gh supplies a synthetic token from an empty configuration.
 - Low-level transaction tests use bare repositories marked as disposable fixtures. The production tests (`tests/test_production.py`) use unmarked bare repositories and `file://` URLs as real targets, through the public `prepare` and `operation` commands, and through direct library calls, run from a clean checkout of the source under test.
 
 ## Release gates
@@ -92,7 +94,7 @@ Each test's docstring names the contract row it exercises. Every assertion reads
 
 ## What a pass does not prove
 
-- GitHub or provider behavior.
+- GitHub or provider behavior, including GitHub's Release behavior, and TLS to `api.github.com`.
 - Operating systems other than the one that ran.
 - Agent integration.
 - Real acceptance. Fixture receipts and verdicts are SIMULATED.
