@@ -55,6 +55,7 @@ class StandIn:
         self.full_name = slug
         self.releases: list[dict] = []
         self.post, self.redirect_to, self.refusal = "201", None, "Validation Failed"
+        self.request_id = "C0DE:5EED:0001"  # the X-GitHub-Request-Id of every answer
         self.raw: dict[str, bytes | str] = {}  # "GET /path?query" or "POST /path" -> exact bytes, DROP or STALL
         self.next_origin: str | None = None  # serve rel="next" links naming another origin
         self.on_listing = self.on_post = None
@@ -114,7 +115,7 @@ class _Handler(BaseHTTPRequestHandler):
         data = b"" if value is None else json.dumps(value).encode("utf-8")
         self.send_response(status)
         for name, text in {"Content-Type": "application/json; charset=utf-8", "Content-Length": str(len(data)),
-                           "X-GitHub-Request-Id": "C0DE:5EED:0001", **(headers or {})}.items():
+                           "X-GitHub-Request-Id": self.server.stand_in.request_id, **(headers or {})}.items():
             self.send_header(name, text)
         self.end_headers()
         self.wfile.write(data)

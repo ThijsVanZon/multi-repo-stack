@@ -188,7 +188,9 @@ class TransportQualificationTests(PageTestCase):
 
     def test_transport_failures_are_unqualified_and_never_retried(self):
         """§6.1 item 5, §4.2 no retries, §4.3: each failure makes a read unqualified, never absence, and puts
-        exactly one request on the wire; the create's failure is reported by its class only."""
+        exactly one request on the wire; the create's failure is reported by its class only. A body cut short of
+        its Content-Length, one over the size limit (though valid JSON) and JSON nested beyond the recursion limit
+        are unqualified too."""
         with socket.socket() as probe:
             probe.bind(("127.0.0.1", 0))
             dead = f"http://127.0.0.1:{probe.getsockname()[1]}"
@@ -199,12 +201,14 @@ class TransportQualificationTests(PageTestCase):
         with self.assertRaises(Stop):
             pages.read(dead, SYNTHETIC_TOKEN, "/user", "visibility")
 
-        big = answer("200 OK", b"[" + b" " * pages.MAX_BODY + b"]")
+        big = answer("200 OK", b'"' + b"a" * (pages.MAX_BODY - 1) + b'"')  # valid JSON, MAX_BODY + 1 bytes
         failures = {"dropped": DROP, "stalled": STALL, "malformed status": b"HTTP/1.1 2OO OK\r\n\r\n",
                     "not JSON": answer("200 OK", b"[{]"), "NaN": answer("200 OK", b"[NaN]"),
                     "duplicate keys": answer("200 OK", b'{"login": "a", "login": "b"}'),
                     "BOM": answer("200 OK", b"\xef\xbb\xbf[]"), "trailing data": answer("200 OK", b"[] []"),
-                    "encoded": answer("200 OK", b"[]", "Content-Encoding: gzip"), "oversized": big}
+                    "encoded": answer("200 OK", b"[]", "Content-Encoding: gzip"), "oversized": big,
+                    "cut short": b"HTTP/1.1 200 OK\r\nContent-Length: 5000\r\n\r\n[]",
+                    "nested too deep": answer("200 OK", b"[" * 200000)}
         calls = 0
         for name, raw in failures.items():
             with self.subTest(name):
@@ -213,8 +217,12 @@ class TransportQualificationTests(PageTestCase):
                     pages.read(self.stand_in.base, SYNTHETIC_TOKEN, "/user", "visibility")
                 self.assertEqual((stopped.exception.status, stopped.exception.reason), ("UNKNOWN", "visibility"))
                 calls += 1
+        self.stand_in.raw = {"GET /user": answer("200 OK", b'"' + b"a" * (pages.MAX_BODY - 2) + b'"')}
+        self.assertEqual(len(pages.read(self.stand_in.base, SYNTHETIC_TOKEN, "/user", "visibility")[1].body),
+                         pages.MAX_BODY, "a complete body of exactly the limit qualifies")
+        calls += 1
         expected = {"dropped": ("RemoteDisconnected", None), "stalled": ("TimeoutError", None),
-                    "malformed status": ("BadStatusLine", None)}
+                    "malformed status": ("BadStatusLine", None), "cut short": ("IncompleteRead", None)}
         for name, (failure, status) in expected.items():
             with self.subTest(create=name):
                 self.stand_in.raw = {f"POST /repos/{SLUG}/releases": failures[name]}
@@ -222,7 +230,7 @@ class TransportQualificationTests(PageTestCase):
                 self.assertEqual((sent.failure, sent.status), (failure, status))
                 calls += 1
         self.one_request_per_connection(self.stand_in, calls)
-        self.assertEqual(len(self.stand_in.posts()), 3)
+        self.assertEqual(len(self.stand_in.posts()), 4)
 
     def test_create_body_arrives_byte_exact(self):
         """§6.1 item 6, §4.5 step 4: the stand-in receives exactly the request bytes, with their length."""
@@ -633,10 +641,12 @@ class PageCreateTests(PageScenarioTestCase):
         self.assertEqual(len(self.creates()), 1)
 
     def test_nothing_sensitive_is_persisted_or_printed(self):
-        """§4.5 step 5, §4.2 credential: a 422 message carrying synthetic credentials and the synthetic token
-        itself appears neither in any file of the operation folder nor in the printed report."""
-        secrets = ["ghp_" + "A" * 36, "fixtureBearerSecret", "fixture-user:fixture-pass", SYNTHETIC_TOKEN]
-        self.stand_in.post = "422"
+        """§4.5 step 5, §4.2 credential: a 422 message carrying synthetic credentials, the synthetic token itself
+        and a credential-shaped request id appear neither in any file of the operation folder nor in the printed
+        report; result.json keeps exactly its fields, with the unsafe request id as null."""
+        secrets = ["ghp_" + "A" * 36, "fixtureBearerSecret", "fixture-user:fixture-pass", SYNTHETIC_TOKEN,
+                   "ghp_" + "B" * 36]
+        self.stand_in.post, self.stand_in.request_id = "422", f"token {secrets[4]}"
         self.stand_in.refusal = (f"Bad credentials {secrets[0]}; Authorization: Bearer {secrets[1]}; "
                                  f"see https://{secrets[2]}@example.invalid/x with token {secrets[3]}\nsecond line")
         work, digest = self.prepared()
@@ -649,8 +659,41 @@ class PageCreateTests(PageScenarioTestCase):
         for secret in secrets + ["second line"]:
             self.assertNotIn(secret, printed)
             self.assertNotIn(secret.encode("ascii"), stored)
-        self.assertEqual(set(json.loads((work / "result.json").read_bytes())),
-                         {"status", "request_id", "transport", "at"})
+        result = json.loads((work / "result.json").read_bytes())
+        self.assertEqual(set(result), {"status", "request_id", "transport", "at"})
+        self.assertIsNone(result["request_id"], "a request id that is not [0-9A-Fa-f:]{1,64} is never kept")
+
+
+class PageMalformedAnswerTests(PageScenarioTestCase):
+    def test_malformed_provider_answers_are_unknown_also_after_the_create(self):
+        """§4.3, §5 exit codes: a listing nested beyond the recursion limit, or N's page body holding a lone
+        surrogate, is UNKNOWN (listing) with exit 4, never a crash: in reconcile and in apply's readback after its
+        one POST, which no later command resends."""
+        nested = {f"GET {LISTING}1": answer("200 OK", b"[" * 200000)}
+        cases = {"nested": lambda: self.stand_in.raw.update(nested),
+                 "lone surrogate": lambda: self.published(body="\ud800 notes")}
+        for name, malformed in cases.items():
+            with self.subTest(name):
+                self.stand_in.releases, self.stand_in.raw, self.stand_in.wire = [], {}, []
+                work, digest = self.prepared(f"op {name}")
+
+                def run(*args) -> tuple[int, dict]:
+                    code, printed = self.mrs(*args, "--work", work, "--json")
+                    return code, json.loads(printed)
+                malformed()
+                code, report = run("reconcile")
+                self.assertEqual((code, report["status"], report["reason"]), (4, "UNKNOWN", "listing"), report)
+                self.stand_in.releases, self.stand_in.raw = [], {}
+                self.stand_in.on_post = malformed
+                code, report = run("apply", "--operation-sha256", digest)
+                self.stand_in.on_post = None
+                self.assertEqual((code, report["status"], report["reason"], report["attempt"]),
+                                 (4, "UNKNOWN", "listing", "claimed-with-result"), report)
+                self.assertEqual(run("reconcile")[0], 4)
+                self.stand_in.raw = {}
+                self.stand_in.releases = [r for r in self.stand_in.releases if "\ud800" not in r["body"]]
+                self.assertEqual(run("apply", "--operation-sha256", digest)[1]["status"], "NOOP")
+                self.assertEqual(len(self.stand_in.posts()), 1)
 
 
 class PageRaceAndReadOnlyTests(PageScenarioTestCase):

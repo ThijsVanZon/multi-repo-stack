@@ -93,6 +93,8 @@ def call(api: str, token: str, method: str, target: str, body: bytes | None = No
         connection.endheaders(body)
         response = connection.getresponse()
         data = response.read(MAX_BODY + 1)
+        if response.length and len(data) <= MAX_BODY:  # fewer bytes arrived than Content-Length declared
+            raise http.client.IncompleteRead(data, response.length)
         return Answer(response.status, {k.lower(): v for k, v in response.getheaders()}, data, None)
     except (OSError, http.client.HTTPException) as exc:
         return Answer(None, {}, b"", type(exc).__name__)
@@ -128,7 +130,9 @@ def _strict(data: bytes):
     text = data.decode("utf-8")
     if text.startswith("﻿"):
         raise ValueError("byte order mark")
-    return json.loads(text, object_pairs_hook=unique, parse_constant=constant)
+    value = json.loads(text, object_pairs_hook=unique, parse_constant=constant)
+    json.dumps(value, ensure_ascii=False).encode("utf-8")  # UnicodeEncodeError: a lone surrogate is not text
+    return value
 
 
 def _shown(answer: Answer) -> str:
@@ -144,7 +148,7 @@ def read(api: str, token: str, target: str, what: str):
     if problem is None:
         try:
             return _strict(answer.body), answer
-        except ValueError as exc:  # UnicodeDecodeError included
+        except (ValueError, RecursionError) as exc:  # UnicodeDecodeError and UnicodeEncodeError included
             problem = f"answered a body that is not strict JSON ({type(exc).__name__})"
     raise Stop("UNKNOWN", what, f"GET {target} {problem}")
 
@@ -394,7 +398,7 @@ def _message(answer: Answer, token: str) -> str:
     """GitHub's error message for the printed report only: one line, credential-shaped text redacted."""
     try:
         text = _strict(answer.body).get("message")
-    except (ValueError, AttributeError):
+    except (ValueError, RecursionError, AttributeError):
         return ""
     if not isinstance(text, str) or not text.strip():
         return ""
