@@ -8,8 +8,8 @@ from pathlib import Path
 from unittest import mock
 
 from mrs import config
-from tests.consumer_support import (IMPLEMENTATION, NATIVE, PIN, PSTACK_TREE, RESEARCH, ConsumerTestCase,
-                                    probe, selector, shape_files)
+from tests.consumer_support import (IMPLEMENTATION, NATIVE, PIN, RESEARCH, ConsumerTestCase,
+                                    probe, pstack_tree, selector, shape_files)
 from tests.support import DEV, SHARED_REPOSITORY, out, refs, shared_snapshot, tree_digest
 
 EXACT = "line one\r\nline two € with no final newline".encode("utf-8")
@@ -61,7 +61,7 @@ class CollectionTests(ConsumerTestCase):
                 self.assertEqual(record["shared"], {"repository": SHARED_REPOSITORY, "commit": shared_snapshot()[1],
                                                     "self": False, "clean": True})
                 self.assertEqual(record["pstack"], {"repository": "cursor/plugins", "commit": PIN, "path": "pstack",
-                                                    "tree": PSTACK_TREE})
+                                                    "tree": pstack_tree(self.pstack())})
                 self.assertEqual((record["runner"]["os"], record["unmet"]), (NATIVE, []))
                 [result] = record["results"]
                 self.assertEqual((result["check"], result["environment"], result["outcome"], result["exit"]),
