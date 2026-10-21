@@ -63,6 +63,10 @@ class PstackDeliveryTests(GitTestCase):
         manifests = {client: sorted(p.name for p in (entry / "mrs-handshake").glob(".*-plugin"))
                      for client, entry in entries.items()}
         self.assertEqual(manifests, {"claude-code": [".claude-plugin"], "cursor": [".cursor-plugin"]})
+        code, text, _ = sync("--consumer", self.consumer, "--pstack", self.pstack(), "--client", "claude-code",
+                             "--cache", self.cache)
+        paths = [str(entries["claude-code"] / name) for name in ("pstack", "mrs-handshake")]
+        self.assertIn(f"CLAUDE_CODE_PLUGIN_DIRS={os.pathsep.join(paths)}\n", text)  # the desktop app takes no flags
 
     def test_sync_is_idempotent_and_writes_only_its_cache(self):
         """Isolation: a repeated sync writes nothing and re-verifies; consumer, pstack and the home folder (the
