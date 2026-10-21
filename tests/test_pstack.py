@@ -89,7 +89,7 @@ class PstackDeliveryTests(GitTestCase):
         before anything is written; an entry changed after writing is refused, not rewritten."""
         stale = self.tmp / "stale pstack"
         out("clone", "--quiet", "--shared", "--config", "core.autocrlf=false", self.pstack(), stale)
-        out("-C", stale, "-c", "advice.detachedHead=false", "checkout", "--quiet", "--detach", f"{PIN}~1")
+        out("-C", stale, "commit", "--quiet", "--allow-empty", "-m", "Not the pin")  # CI fetches the pin alone
         code, report = self.run_sync("cursor", pstack=stale)
         self.assertEqual((code, report["status"]), (3, "REFUSED"), report)
         self.assertIn(f"but {PIN} is selected", report["reason"])
