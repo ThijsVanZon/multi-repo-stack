@@ -1,6 +1,7 @@
 # Lifecycle rules (`lifecycle` applicability only)
 
 - `dev` carries the active unreleased line. `main` is the latest contract release, and is absent before the first one.
+- **Protection.** On the forge, `dev` and `main` refuse deletion and non-fast-forward updates from everyone. Otherwise `dev` changes only by a squash-merged PR whose required checks pass, and `main` only by a release; only the release operator bypasses this, because a release pushes `main` and `dev` directly.
 - Root `VERSION` holds `YY.RELEASE.PATCH`: a two-digit year, no `v` prefix and a single final newline. Task branches are `<VERSION>/<task>`, with `<task>` in lowercase kebab-case starting with a letter, and target `dev`. Ordinary tasks never change `VERSION`. After the line advances, port old-line work explicitly to a correctly prefixed branch.
 - **Tasks.** pstack runs the PR workflow (opening a PR, babysitting, shipping); this tool adds only the lifecycle policy, and runs no forge command for tasks.
   - `mrs task create --repository <target> --checkout <your checkout> --task <task>` creates `<active VERSION>/<task>` in your checkout, at the target's current `dev`. It never moves an existing branch, and changes nothing else in your checkout.
