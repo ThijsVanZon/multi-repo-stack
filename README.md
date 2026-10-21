@@ -36,6 +36,7 @@ Implemented and exercised by tests against disposable local repositories:
   - `check` validates a task against the target's current state: the active prefix, a lowercase kebab-case name, base `dev` or a same-line parent task that it contains, descent from the commit that opened the line, an unchanged `VERSION` and a lifecycle selector. A VALID result describes one observation; it locks and accepts nothing.
   - Both refuse context-only, empty, unsupported and redirected targets. pstack owns PRs, stacks, review and landing; `docs/lifecycle.md` describes the explicit port after a line advances.
 - **Connection and upgrades** are documented procedures, not tools (`docs/connect.md`). An existing repository connects for context with a selector and an appended `AGENTS.md` route, and nothing else changes. An upgrade changes the one selector; old checkouts, old `--expect` records and old check records then refuse.
+- **pstack delivery** (`mrs pstack sync`; `mrs/pstack.py`). After preflight, it rebuilds the client's tree at the pin from Git objects into an immutable cache entry named by its content digest: upstream's generated `harness/pstack/claude-code` for Claude Code, `pstack/` for Cursor. Beside it is a generated `mrs-handshake` plugin whose answer names the shared and pstack commits. An existing entry is re-verified, never rewritten. It prints the client's activation (`claude --plugin-dir`, or the `pluginPaths` of a Cursor `workspaceOpen` hook); `docs/connect.md` gives the optional entry hooks.
 - **Bootstrap and release operations** (`mrs prepare`, `mrs operation`; `mrs/transactions.py`):
   - **Prepare** writes only a new operation folder outside any checkout: the operation record and a private store holding the prepared objects. It publishes nothing.
     - `prepare bootstrap` targets an observed empty repository: any ref, including a provider's README commit, refuses, and UNKNOWN is never empty. Apply then creates only `dev` at exact B, expecting it absent. A lease on `dev` cannot guard other refs, so you must be the target's sole initializer.
@@ -50,7 +51,7 @@ Implemented and exercised by tests against disposable local repositories:
 
 Deliberate limits:
 
-- Only `operation apply` changes a target's refs, and only as prepared; `page apply` creates only its one Release page. `task create` adds one new branch, and the objects it needs, to the caller's local checkout; `prepare` writes only its new operation folder; nothing else writes outside its own scratch. Any destination rewrite, including an empty `insteadOf`/`pushInsteadOf` prefix in whichever configuration file holds it, or a remote named like the destination, is refused. Configuration that Git cannot read is UNKNOWN.
+- Only `operation apply` changes a target's refs, and only as prepared; `page apply` creates only its one Release page. `task create` adds one new branch, and the objects it needs, to the caller's local checkout; `prepare` writes only its new operation folder; `pstack sync` adds only new cache entries; nothing else writes outside its own scratch. Any destination rewrite, including an empty `insteadOf`/`pushInsteadOf` prefix in whichever configuration file holds it, or a remote named like the destination, is refused. Configuration that Git cannot read is UNKNOWN.
 - Pushes come from the operation's own bare store, so submodule recursion has no submodule repository to act on. `--recurse-submodules=no` is defense in depth there, not a separately demonstrable guard.
 - The low-level `prepare_release` records an unjudged payload for the transaction tests, and refuses one that claims the assessed format. It accepts only disposable fixtures: local bare repositories carrying the `mrs-disposable-fixture` marker, which only test code creates. Observers still recognize such receipts.
 - The tool cannot see a provider's own rules, such as branch protection, rulesets or hidden refs. It reports the push and the state it observes afterwards; it neither bypasses nor detects provider policy in advance.
@@ -59,6 +60,7 @@ Deliberate limits:
 - Provider behavior (atomicity, lease rejection, races and protections) is established only as far as a release's verdict records it; the tests use local Git repositories only.
 - **Release pages: tag-disappearance race, unsolved.** If tag N is deleted between apply's classification and its create, GitHub may create a lightweight tag N at C. The tool reports DIVERGED (tag) afterwards and repairs nothing, but cannot prevent it. No real `page apply` is authorized until this is resolved or explicitly accepted.
 - **Release pages: live behavior unproven.** The tests use loopback stand-ins only. Draft visibility on the `repo`-scope path, byte-exact bodies, `make_latest` "false" and GitHub's answers to redirects and pagination are unobserved; a redirect is UNKNOWN, never followed. TLS uses Python's default trust store, and proxies are unsupported: an unverifiable trust store or a proxied-only network gives UNKNOWN. The token gh prints is trusted beyond the login and scope checks. The listing is read page by page, so a release shifting across pages between reads can be missed. Other state is sampled, not locked. The claim is a local file without a folder fsync on Windows, and an operator who deletes it and reruns is outside the grant. The tag read inherits the existing Git redirect behavior. Publishing can trigger release workflows, which the tool does not check.
+- **pstack delivery is observed per client, not proven per session.** Recorded probes loaded deliveries of this shape in Claude Code CLI on Windows and Linux and in Cursor 3.25.9 on Windows; other versions and OSes are unobserved. The handshake shows that one skill of the delivery loaded, not every skill, and plugins delivered to the account or organization can still coexist. Claude Desktop Chat and Cowork, Cursor Cloud Agents and cloud sessions have no per-repository route and are unsupported.
 - Evidence binds exact commits. A release's receipt holds its runtime records, with each runner's OS, Python and Git, and its verdict with the accepted limitations. Hosted CI records describe only the commits they name. A later commit is covered by none of it until its own release.
 
 ## Use
@@ -78,11 +80,12 @@ python -I -B <shared checkout>/mrs operation inspect|apply|reconcile --work <ope
 python -I -B <shared checkout>/mrs page prepare --repository https://github.com/<owner>/<name> --tag <N> --title "<title>" --notes <file> --principal <login> --work <new folder> [--json]
 python -I -B <shared checkout>/mrs page apply --work <folder> --operation-sha256 <granted digest> [--json]
 python -I -B <shared checkout>/mrs page reconcile --work <folder> [--json]
+python -I -B <shared checkout>/mrs pstack sync --consumer <consumer checkout> --pstack <pstack checkout> --client claude-code|cursor [--cache <folder>] [--hook] [--json]
 ```
 
 Exit codes:
 
-- `0`: OK, every applicable check passed, the assessment is SUFFICIENT, the task branch was created, the task is VALID, the operation was prepared, is valid, was applied or was already complete.
+- `0`: OK, every applicable check passed, the assessment is SUFFICIENT, the task branch was created, the task is VALID, the operation was prepared, is valid, was applied or was already complete, or the pstack delivery is staged (with `--hook`, every result).
 - `1`: a check did not pass, the assessment is INCOMPLETE, the task is INVALID, or the operation is not applied yet.
 - `2`: usage error.
 - `3`: refused, or the target diverged from the operation.
@@ -92,7 +95,7 @@ Exit codes:
 
 Page commands use the same codes: `0` PREPARED, COMPLETED, APPLIED or NOOP; `1` NOT_APPLIED; `3` REFUSED or DIVERGED; `4` UNKNOWN.
 
-Only `operation apply` writes to a target, and only `page apply` creates a Release page. `collect` writes only its record and logs, `task create` only its new branch into your checkout, and `prepare` and `page prepare` only their new operation folder.
+Only `operation apply` writes to a target, and only `page apply` creates a Release page. `collect` writes only its record and logs, `task create` only its new branch into your checkout, `prepare` and `page prepare` only their new operation folder, and `pstack sync` only new cache entries.
 
 **The verdict file** is JSON in the `multi-repo-stack/attestation/1` format. Its keys:
 

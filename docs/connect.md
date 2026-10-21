@@ -32,6 +32,26 @@ Both are ordinary changes to the consumer, made through its own workflow. For a 
 
 Lifecycle adoption of a repository with existing content is not this procedure. It needs a separately reviewed transition to a compatible state.
 
+## Load pstack into Claude Code or Cursor
+
+`mrs pstack sync` runs preflight, then rebuilds the client's tree at the pin from Git objects into an immutable cache entry named by its content digest, next to a generated `mrs-handshake` plugin. It writes only new cache entries (`--cache`, default the user cache folder), never client, consumer or account files, and the client loads the entry by path. Nothing is installed: no client offers a per-repository pinned install, and account- or organization-wide plugins reach every repository.
+
+- **Claude Code** loads upstream's generated `harness/pstack/claude-code` tree. Start it with the two `--plugin-dir` arguments sync prints; they last for that session and install nothing. Skills are named `pstack:<folder>`, and most run only as commands. After the selection changes, sync again and relaunch with the new paths.
+- **Cursor** loads `pstack/` through a `workspaceOpen` hook that returns `pluginPaths`. `--hook` prints exactly that and exits 0, or prints `{}` on a refusal, so the workspace opens without the delivery.
+- **Handshake.** Ask the agent for the mrs handshake. The exact line sync printed shows that this session loaded this delivery; another line, or none, means it did not. It shows that one skill of this delivery loaded, not that every skill did, and it cannot rule out another pstack source delivered to the account or organization.
+
+The entry hooks are optional and installed by a person, never by the tool. They hold machine paths, so keep them out of the consumer's commits (Claude Code already ignores its local settings file; add `.cursor/hooks.json` to `.git/info/exclude`). They run from the project root, which `--consumer` defaults to. Use forward slashes in paths.
+
+```json
+{"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "python -I -B \"<shared checkout>/mrs\" pstack sync --pstack \"<pstack checkout>\" --client claude-code --hook"}]}]}}
+```
+
+That is `.claude/settings.local.json`. Claude Code shows the hook's text to the agent at startup only; at resume the hook runs, but its text is not shown. The Cursor hook goes in `.cursor/hooks.json` (on Windows, prefix the command with `& `, because Cursor runs it inside PowerShell). Project hooks run only in a trusted workspace:
+
+```json
+{"version": 1, "hooks": {"workspaceOpen": [{"command": "python -I -B \"<shared checkout>/mrs\" pstack sync --pstack \"<pstack checkout>\" --client cursor --hook"}]}}
+```
+
 ## Check for an update (manual, read-only)
 
 Nothing notifies a consumer or changes its selection; this check is manual. To check on demand, fetch into a scratch bare repository (`git init --bare <scratch>`) outside every checkout, with `<selected>` the commit your selector names and `<N>` a release that `inspect` lists:
