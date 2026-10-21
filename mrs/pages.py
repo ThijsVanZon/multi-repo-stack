@@ -41,7 +41,7 @@ _SECRET = re.compile(r"(?i)\b(?:gh[opsur]_|github_pat_)\w+|[a-z][a-z0-9+.-]*://[
                      r"[\s:=]*(?:(?:bearer|token|basic)\b)?|bearer\b|token\b)[\s:=]+\S+")
 FORMAT = "multi-repo-stack/page/1"
 RECORD, REQUEST, NOTES, CLAIM, RESULT = "page.json", "request.json", "notes.md", "claim.json", "result.json"
-FIXED = {"draft": False, "prerelease": False, "generate_release_notes": False, "make_latest": "false"}
+FIXED = {"draft": False, "prerelease": False, "generate_release_notes": False}
 _KEYS = {"format", "repository", "api", "api_version", "destination", "tag", "tag_object", "candidate", "title",
          "notes_sha256", "request_sha256", "principal", "fixed", "tool", "prepared_at"}
 

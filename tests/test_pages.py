@@ -22,8 +22,8 @@ LISTING = f"/repos/{SLUG}/releases?per_page=100&page="
 def create_body(tag: str = "26.1.0", notes: str = "Notes \u00fc \u2014\n\nend\n") -> bytes:
     """A create request shaped as prepare serializes it."""
     return (json.dumps({"tag_name": tag, "target_commitish": "c" * 40, "name": f"app {tag}", "body": notes,
-                        "draft": False, "prerelease": False, "generate_release_notes": False,
-                        "make_latest": "false"}, indent=2, ensure_ascii=True) + "\n").encode("ascii")
+                        "draft": False, "prerelease": False, "generate_release_notes": False},
+                       indent=2, ensure_ascii=True) + "\n").encode("ascii")
 
 
 class PageTestCase(GitTestCase):
@@ -305,7 +305,7 @@ class PagePreparationTests(PageScenarioTestCase):
         self.assertEqual((work / "notes.md").read_bytes(), NOTES)
         self.assertEqual((work / "request.json").read_bytes(), (json.dumps(
             {"tag_name": TAG, "target_commitish": record["candidate"], "name": TITLE, "body": NOTES.decode("utf-8"),
-             "draft": False, "prerelease": False, "generate_release_notes": False, "make_latest": "false"},
+             "draft": False, "prerelease": False, "generate_release_notes": False},
             indent=2, ensure_ascii=True) + "\n").encode("ascii"))
         self.assertEqual(record["tag_object"], self.before[f"refs/tags/{TAG}"])
         self.assertEqual((record["repository"], record["principal"], record["api_version"]),
@@ -368,7 +368,7 @@ class PageBindingTests(PageScenarioTestCase):
             "page.json routed elsewhere": {"page.json": pages._json(
                 {**record, "api": pages.API, "destination": "https://github.com/other/app"})},
             "page.json tag object": {"page.json": pages._json({**record, "tag_object": record["candidate"]})},
-            "request.json": {"request.json": (work / "request.json").read_bytes().replace(b'"false"', b'"true"')},
+            "request.json": {"request.json": (work / "request.json").read_bytes().replace(b"false", b"true")},
             "notes.md": {"notes.md": notes},
             "notes.md and request.json together": {"notes.md": notes, "request.json": request},
         }
@@ -549,7 +549,7 @@ class PageCreateTests(PageScenarioTestCase):
         return [request for request in self.stand_in.posts() if request.path == CREATE]
 
     def test_201_applies_once_and_a_second_apply_is_noop(self):
-        """§4.5: the validated request is sent once (make_latest "false"); result.json keeps exactly its fields;
+        """§4.5: the validated request is sent once, without make_latest; result.json keeps exactly its fields;
         a second apply is NOOP and reconcile COMPLETED, with no further POST."""
         work, digest = self.prepared()
         report = pages.apply(work, digest)
@@ -557,7 +557,7 @@ class PageCreateTests(PageScenarioTestCase):
         self.assertEqual(report["page"], {"id": 1000, "html_url": f"https://github.com/{SLUG}/releases/tag/{TAG}"})
         [post] = self.creates()
         self.assertEqual(post.body, (work / "request.json").read_bytes())
-        self.assertEqual(json.loads(post.body)["make_latest"], "false")
+        self.assertNotIn("make_latest", json.loads(post.body))
         result = json.loads((work / "result.json").read_bytes())
         self.assertEqual(set(result), {"status", "request_id", "transport", "at"})
         self.assertEqual((result["status"], result["request_id"], result["transport"]),
