@@ -18,12 +18,15 @@ from pathlib import Path
 from tests.support import NOW, ROOT, SHARED_REPOSITORY, GitTestCase, out, shared_snapshot, snapshot_source
 
 CONSUMERS = ROOT / "tests" / "consumers"
-PIN = "7022c81efb48d8b5eb15498ce6043a3bd74b694c"
-PSTACK_TREE = "975600f2f90dc6f755d58cccdccee27f950edcd2"
+PIN = json.loads((ROOT / "multi-repo-stack.json").read_bytes())["pstack"]["commit"]
 NATIVE = {"Windows": "windows", "Linux": "linux", "Darwin": "macos"}[platform.system()]  # to build fixture criteria
 PYTHON = Path(sys.executable).stem  # each test puts this interpreter's folder first on PATH
 IMPLEMENTATION = {"build-and-run": ([PYTHON, "-I", "-B", "tools/build_and_run.py"], True)}
 RESEARCH = {"synthetic-slope": ([PYTHON, "-I", "-B", "analysis/check_slope.py"], False)}
+
+
+def pstack_tree(pstack: Path) -> str:
+    return out("-C", pstack, "rev-parse", f"{PIN}:pstack")
 
 
 def probe(mode: str, *args: str, required: bool = True) -> tuple[list[str], bool]:

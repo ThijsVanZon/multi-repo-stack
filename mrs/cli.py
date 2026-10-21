@@ -1,8 +1,8 @@
-"""Commands: preflight, inspect, collect, assess, task, prepare, operation and page. Only `operation apply`
+"""Commands: preflight, inspect, collect, assess, task, prepare, operation, page and pstack. Only `operation apply`
 publishes lifecycle refs: it applies one prepared bootstrap or release to its target. Only `page apply` creates a
 GitHub Release page: the one create of one prepared page operation. `prepare` and `page prepare` write only a new
-operation folder, `task create` adds one new branch to the caller's local checkout, and everything else is
-read-only toward targets."""
+operation folder, `task create` adds one new branch to the caller's local checkout, `pstack sync` adds only new
+cache entries, and everything else is read-only toward targets."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from . import acceptance, collect, git, pages, sources, state, tasks, transactions
+from . import acceptance, collect, git, pages, pstack, sources, state, tasks, transactions
 
 OK, NOT_PASSED, REFUSED, UNKNOWN, INVALIDATED, MIXED = 0, 1, 3, 4, 5, 6
 _remove = collect.remove_tree
@@ -331,6 +331,33 @@ def _page(args) -> int:
             "UNKNOWN": UNKNOWN}.get(report["status"], REFUSED)
 
 
+def _pstack(args) -> int:
+    try:
+        report = pstack.sync(Path(args.consumer), Path(args.pstack) if args.pstack else None, args.client,
+                             Path(args.cache) if args.cache else pstack.default_cache())
+    except (sources.SourceError, git.GitError, OSError) as exc:
+        report = {"status": "REFUSED", "reason": str(exc)}
+    if args.hook:  # Cursor's workspaceOpen hook output; a refusal loads nothing
+        print(json.dumps({"pluginPaths": report["plugin_paths"]} if "plugin_paths" in report else {}))
+        print(f"PSTACK {report['status']}: {report.get('reason', report.get('entry'))}", file=sys.stderr)
+        return OK
+    if "plugin_paths" not in report:
+        _print(report, args.json, [f"PSTACK REFUSED: {report['reason']}"])
+        return REFUSED
+    paths = report["plugin_paths"]
+    activate = ("claude " + " ".join(f'--plugin-dir "{path}"' for path in paths) if args.client == "claude-code"
+                else "a workspaceOpen hook returning pluginPaths " + ", ".join(paths) + " (docs/connect.md)")
+    _print(report, args.json, [
+        f"PSTACK STAGED for {args.client}: the pinned pstack bytes, verified, in an immutable cache entry. A client "
+        "loads them only when started with it; no client, consumer or account file was changed.",
+        f"entry     {report['entry']}  ({'created' if report['writes'] else 'already present'}; re-verified)",
+        f"activate  {activate}",
+        f"handshake the mrs-handshake skill must answer exactly: {report['handshake']}",
+        "          Another line, or no such skill, means this session has not loaded this delivery: relaunch or reload.",
+    ])
+    return OK
+
+
 def main(argv: list[str] | None = None) -> int:
     for stream in (sys.stdout, sys.stderr):  # paths may be non-ASCII; never depend on the console code page
         stream.reconfigure(encoding="utf-8", errors="backslashreplace")
@@ -422,5 +449,19 @@ def main(argv: list[str] | None = None) -> int:
             sub.add_argument("--operation-sha256", required=True, help="the granted operation digest")
         sub.add_argument("--json", action="store_true")
     page.set_defaults(handler=_page)
+    ps = commands.add_parser("pstack", help="stage the pinned pstack for a client")
+    ps_commands = ps.add_subparsers(dest="pstack_command", required=True)
+    syn = ps_commands.add_parser("sync", help="after preflight, build the client's pstack delivery into the cache; "
+                                              "writes only new cache entries")
+    syn.add_argument("--consumer", default=".", help="consumer checkout root (default: current directory)")
+    syn.add_argument("--pstack", help="clean checkout of the pinned canonical pstack repository")
+    syn.add_argument("--client", required=True, choices=sorted(pstack.TREES))
+    syn.add_argument("--cache", help="cache folder outside every checkout (default: the user cache folder)")
+    syn.add_argument("--hook", action="store_true", help="with --client cursor: print the workspaceOpen hook output; "
+                                                         "exit 0")
+    syn.add_argument("--json", action="store_true")
+    ps.set_defaults(handler=_pstack)
     args = parser.parse_args(argv)
+    if getattr(args, "hook", False) and args.client != "cursor":
+        syn.error("--hook is only for --client cursor")
     return args.handler(args)

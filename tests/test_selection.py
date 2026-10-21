@@ -7,11 +7,9 @@ from pathlib import Path
 
 from mrs import transactions
 from mrs.transactions import Refused
+from tests.consumer_support import PIN, pstack_tree
 from tests.support import (DEV, MAIN, NOW, SHARED_REPOSITORY, GitTestCase, out, refs, selector,
                            shared_snapshot, snapshot_source)
-
-PIN = "7022c81efb48d8b5eb15498ce6043a3bd74b694c"
-PSTACK_TREE = "975600f2f90dc6f755d58cccdccee27f950edcd2"
 
 
 def run_tool(checkout, *args) -> tuple[int, str]:
@@ -55,7 +53,7 @@ class SelectionTests(GitTestCase):
         self.assertEqual(report["shared"], {"repository": SHARED_REPOSITORY, "commit": shared_commit,
                                             "self": False, "clean": True})
         self.assertEqual(report["pstack"], {"repository": "cursor/plugins", "commit": PIN, "path": "pstack",
-                                            "tree": PSTACK_TREE})
+                                            "tree": pstack_tree(self.pstack())})
         self.assertEqual([Path(path).resolve() for path in report["load"]],
                          [(checkout / "docs" / name).resolve() for name in ("context.md", "lifecycle.md")])
         self.assertEqual(out("-C", checkout, "rev-parse", "HEAD"), shared_commit)
@@ -68,7 +66,7 @@ class SelectionTests(GitTestCase):
         self.assertEqual(code, 0, text)
         self.assertIn("PREFLIGHT OK", text)
         self.assertIn(f"shared    {SHARED_REPOSITORY}  commit={shared_commit}  (this checkout)", text)
-        self.assertIn(f"pstack    cursor/plugins  commit={PIN}  pstack tree={PSTACK_TREE}", text)
+        self.assertIn(f"pstack    cursor/plugins  commit={PIN}  pstack tree={pstack_tree(self.pstack())}", text)
 
     def test_shared_project_self_check_needs_clean_committed_source(self):
         """Caller/source preservation: the shared project checking itself verifies only clean committed source.
@@ -164,7 +162,7 @@ class SelectionTests(GitTestCase):
         cases = {
             "missing": (self.tmp / "no such checkout", "is missing"),
             "installed copy": (installed, "not the root of a Git checkout"),
-            "different revision": (moved, "but 7022c81efb48d8b5eb15498ce6043a3bd74b694c is selected"),
+            "different revision": (moved, f"but {PIN} is selected"),
             "modified file": (dirty, "modified, untracked or ignored"),
             "untracked shadowing file": (shadow, "modified, untracked or ignored"),
             "edit hidden by assume-unchanged": (hidden, "content differs"),
