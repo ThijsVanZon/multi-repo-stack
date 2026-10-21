@@ -80,7 +80,7 @@ class PstackDeliveryTests(GitTestCase):
         entry = Path(report1["entry"])
         self.assertEqual((report1["writes"], report2["writes"], report2["entry"]), ([str(entry)], [], str(entry)))
         cache = next(path for path in home.rglob("multi-repo-stack") if path.is_dir())
-        self.assertEqual(entry.parent, cache / "pstack" / "claude-code")
+        self.assertEqual(entry.parent, cache.resolve() / "pstack" / "claude-code")  # macOS: /var is a link
         self.assertEqual([p for p in home.rglob("*") if p.is_file() and cache not in p.parents], [])
         self.assertEqual({path: tree_digest(path) for path in before}, before)
 
