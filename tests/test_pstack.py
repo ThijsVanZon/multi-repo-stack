@@ -93,11 +93,13 @@ class PstackDeliveryTests(GitTestCase):
         code, report = self.run_sync("cursor", pstack=stale)
         self.assertEqual((code, report["status"]), (3, "REFUSED"), report)
         self.assertIn(f"but {PIN} is selected", report["reason"])
-        code, text, _ = sync("--consumer", self.consumer, "--pstack", self.pstack(), "--client", "cursor",
-                             "--cache", self.consumer / "cache", "--json")
-        self.assertEqual(code, 3, text)
-        self.assertIn("must be outside", json.loads(text)["reason"])
-        self.assertFalse(self.cache.exists() or (self.consumer / "cache").exists())
+        for inside in (self.consumer / "cache", shared_snapshot()[0] / "cache"):
+            code, text, _ = sync("--consumer", self.consumer, "--pstack", self.pstack(), "--client", "cursor",
+                                 "--cache", inside, "--json")
+            self.assertEqual(code, 3, text)
+            self.assertIn("must be outside", json.loads(text)["reason"])
+            self.assertFalse(inside.exists())
+        self.assertFalse(self.cache.exists())
 
         code, report = self.run_sync("cursor")
         skill = Path(report["entry"]) / "pstack" / "skills" / "bro" / "SKILL.md"
@@ -109,7 +111,7 @@ class PstackDeliveryTests(GitTestCase):
 
     def test_cursor_hook_prints_only_plugin_paths_and_fails_open(self):
         """Entry hook: Cursor's workspaceOpen hook gets exactly {"pluginPaths": [...]}; a refusal loads nothing and
-        still exits 0, so the workspace opens without the delivery."""
+        still exits 0, so the workspace opens without the delivery. Only Cursor has a hook mode."""
         args = ("--consumer", self.consumer, "--client", "cursor", "--cache", self.cache, "--hook")
         code, text, _ = sync(*args, "--pstack", self.pstack())
         entry = next((self.cache / "pstack" / "cursor").iterdir())
@@ -118,3 +120,5 @@ class PstackDeliveryTests(GitTestCase):
         code, text, err = sync(*args)
         self.assertEqual((code, json.loads(text)), (0, {}))
         self.assertIn("PSTACK REFUSED: supply --pstack", err)
+        code, _, err = sync("--consumer", self.consumer, "--client", "claude-code", "--hook")
+        self.assertEqual(code, 2, err)  # Claude Code has no entry hook: the handshake line stays out of its context

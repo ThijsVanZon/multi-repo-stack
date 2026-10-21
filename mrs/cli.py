@@ -337,13 +337,13 @@ def _pstack(args) -> int:
                              Path(args.cache) if args.cache else pstack.default_cache())
     except (sources.SourceError, git.GitError, OSError) as exc:
         report = {"status": "REFUSED", "reason": str(exc)}
-    if args.hook and args.client == "cursor":  # Cursor's workspaceOpen hook output; a refusal loads nothing
+    if args.hook:  # Cursor's workspaceOpen hook output; a refusal loads nothing
         print(json.dumps({"pluginPaths": report["plugin_paths"]} if "plugin_paths" in report else {}))
         print(f"PSTACK {report['status']}: {report.get('reason', report.get('entry'))}", file=sys.stderr)
         return OK
     if "plugin_paths" not in report:
         _print(report, args.json, [f"PSTACK REFUSED: {report['reason']}"])
-        return OK if args.hook else REFUSED
+        return REFUSED
     paths = report["plugin_paths"]
     activate = ("claude " + " ".join(f'--plugin-dir "{path}"' for path in paths) if args.client == "claude-code"
                 else "a workspaceOpen hook returning pluginPaths " + ", ".join(paths) + " (docs/connect.md)")
@@ -457,8 +457,11 @@ def main(argv: list[str] | None = None) -> int:
     syn.add_argument("--pstack", help="clean checkout of the pinned canonical pstack repository")
     syn.add_argument("--client", required=True, choices=sorted(pstack.TREES))
     syn.add_argument("--cache", help="cache folder outside every checkout (default: the user cache folder)")
-    syn.add_argument("--hook", action="store_true", help="print what the client's entry hook expects; exit 0")
+    syn.add_argument("--hook", action="store_true", help="with --client cursor: print the workspaceOpen hook output; "
+                                                         "exit 0")
     syn.add_argument("--json", action="store_true")
     ps.set_defaults(handler=_pstack)
     args = parser.parse_args(argv)
+    if getattr(args, "hook", False) and args.client != "cursor":
+        syn.error("--hook is only for --client cursor")
     return args.handler(args)

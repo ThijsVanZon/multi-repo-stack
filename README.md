@@ -36,7 +36,7 @@ Implemented and exercised by tests against disposable local repositories:
   - `check` validates a task against the target's current state: the active prefix, a lowercase kebab-case name, base `dev` or a same-line parent task that it contains, descent from the commit that opened the line, an unchanged `VERSION` and a lifecycle selector. A VALID result describes one observation; it locks and accepts nothing.
   - Both refuse context-only, empty, unsupported and redirected targets. pstack owns PRs, stacks, review and landing; `docs/lifecycle.md` describes the explicit port after a line advances.
 - **Connection and upgrades** are documented procedures, not tools (`docs/connect.md`). An existing repository connects for context with a selector and an appended `AGENTS.md` route, and nothing else changes. An upgrade changes the one selector; old checkouts, old `--expect` records and old check records then refuse.
-- **pstack delivery** (`mrs pstack sync`; `mrs/pstack.py`). After preflight, it rebuilds the client's tree at the pin from Git objects into an immutable cache entry named by its content digest: upstream's generated `harness/pstack/claude-code` for Claude Code, `pstack/` for Cursor. Beside it is a generated `mrs-handshake` plugin whose answer names the shared and pstack commits. An existing entry is re-verified, never rewritten. It prints the client's activation (`claude --plugin-dir`, or the `pluginPaths` of a Cursor `workspaceOpen` hook); `docs/connect.md` gives the optional entry hooks.
+- **pstack delivery** (`mrs pstack sync`; `mrs/pstack.py`). After preflight, it rebuilds the client's tree at the pin from Git objects into an immutable cache entry named by its content digest: upstream's generated `harness/pstack/claude-code` for Claude Code, `pstack/` for Cursor. Beside it is a generated `mrs-handshake` plugin whose answer names the shared and pstack commits. An existing entry is re-verified, never rewritten. It prints the client's activation (`claude --plugin-dir`, or the `pluginPaths` of a Cursor `workspaceOpen` hook, documented in `docs/connect.md`).
 - **Bootstrap and release operations** (`mrs prepare`, `mrs operation`; `mrs/transactions.py`):
   - **Prepare** writes only a new operation folder outside any checkout: the operation record and a private store holding the prepared objects. It publishes nothing.
     - `prepare bootstrap` targets an observed empty repository: any ref, including a provider's README commit, refuses, and UNKNOWN is never empty. Apply then creates only `dev` at exact B, expecting it absent. A lease on `dev` cannot guard other refs, so you must be the target's sole initializer.
@@ -85,7 +85,7 @@ python -I -B <shared checkout>/mrs pstack sync --consumer <consumer checkout> --
 
 Exit codes:
 
-- `0`: OK, every applicable check passed, the assessment is SUFFICIENT, the task branch was created, the task is VALID, the operation was prepared, is valid, was applied or was already complete, or the pstack delivery is staged (with `--hook`, every result).
+- `0`: OK, every applicable check passed, the assessment is SUFFICIENT, the task branch was created, the task is VALID, the operation was prepared, is valid, was applied or was already complete, or the pstack delivery is staged (Cursor's `--hook` output, every result).
 - `1`: a check did not pass, the assessment is INCOMPLETE, the task is INVALID, or the operation is not applied yet.
 - `2`: usage error.
 - `3`: refused, or the target diverged from the operation.
