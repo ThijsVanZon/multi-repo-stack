@@ -12,6 +12,7 @@
   - Branch names carry the active line, so a task's line is visible and checkable.
   - Shipping lands verified PRs on `dev` only. A release is a separate operation, never a PR into `main`. A task verdict that survives a rebase under Shipping's patch-id rule never carries release acceptance.
   - Before merge, the PR brings every standing document it affects (README.md, `docs/`, agent instructions) into line with the result, so they stay aligned with `dev`. Every squash merge sets its message explicitly, never GitHub's default: the subject is `<PR title> (#<N>)`, the body a short summary of the change, and `Co-Authored-By` the only trailer. No session links, attribution lines or AI footers. A landing is complete only once its task branch no longer exists on the remote.
+  - Before each release, compare the pstack that C uses with upstream's newest pstack and decide whether to upgrade. An upgrade is an ordinary task that lands before C, never an automatic move.
   - Rewriting a task branch (rebase, amend) is pstack's business. `dev`, `main` and release tags are never rewritten.
 - **Bootstrap** creates only `refs/heads/dev`, at an exact prepared commit, on an empty target. It never adopts or overwrites a nonempty repository.
 - **Acceptance** of the integrated commit C needs two things:
