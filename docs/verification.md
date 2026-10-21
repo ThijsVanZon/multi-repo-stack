@@ -92,6 +92,10 @@ Each test's docstring names the contract row it exercises. Every assertion reads
 
 `assess` enforces the runtime pairs and the verdict. Agent and provider evidence reach acceptance only through that verdict, which must accept or reject each reused observation.
 
+## Release page
+
+Title `multi-repo-stack <N>`. Notes: a one-line summary, then `### Included`, `### Release identity and verification` (tag, accepted commit C, annotated tag object, Git release date, D that opened the next line, and C's native runtime evidence and non-author PASS) and `### Boundaries` (what this release leaves out, Python and Git requirement, license). 26.1.0 is the reference.
+
 ## What a pass does not prove
 
 - GitHub or provider behavior, including GitHub's Release behavior, and TLS to `api.github.com`.
