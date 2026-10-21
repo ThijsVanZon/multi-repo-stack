@@ -1,6 +1,8 @@
 # Lifecycle rules (`lifecycle` applicability only)
 
 - `dev` carries the active unreleased line. `main` is the latest contract release, and is absent before the first one.
+- **Protection.** On the forge, `dev` and `main` refuse deletion and non-fast-forward updates from everyone. Otherwise `dev` changes only by a squash-merged PR whose required checks pass, and `main` only by a release; only the release operator bypasses this, because a release pushes `main` and `dev` directly.
+  - Set this up once `dev` exists. On GitHub: one ruleset on `dev` and `main` with Restrict deletions and Block force pushes, no bypass; one on `dev` with Require a pull request (squash only) and Require status checks to pass (this repository's own PR checks, branch up to date); one on `main` with Restrict creations and Restrict updates. The last two have Repository admin as their only bypass actor, so the release operator must be an admin. Also turn on Automatically delete head branches.
 - Root `VERSION` holds `YY.RELEASE.PATCH`: a two-digit year, no `v` prefix and a single final newline. Task branches are `<VERSION>/<task>`, with `<task>` in lowercase kebab-case starting with a letter, and target `dev`. Ordinary tasks never change `VERSION`. After the line advances, port old-line work explicitly to a correctly prefixed branch.
 - **Tasks.** pstack runs the PR workflow (opening a PR, babysitting, shipping); this tool adds only the lifecycle policy, and runs no forge command for tasks.
   - `mrs task create --repository <target> --checkout <your checkout> --task <task>` creates `<active VERSION>/<task>` in your checkout, at the target's current `dev`. It never moves an existing branch, and changes nothing else in your checkout.
@@ -11,6 +13,7 @@
   - Trunk is `dev`, not `main`, because `main` moves only by release. Root PRs target `dev`; a stacked child targets its same-line parent task branch.
   - Branch names carry the active line, so a task's line is visible and checkable.
   - Shipping lands verified PRs on `dev` only. A release is a separate operation, never a PR into `main`. A task verdict that survives a rebase under Shipping's patch-id rule never carries release acceptance.
+  - Before merge, the PR brings every standing document it affects (README.md, `docs/`, agent instructions) into line with the result, so they stay aligned with `dev`. Every squash merge sets its message explicitly, never GitHub's default: the subject is `<PR title> (#<N>)`, the body a short summary of the change, and `Co-Authored-By` the only trailer. No session links, attribution lines or AI footers. A landing is complete only once its task branch no longer exists on the remote.
   - Rewriting a task branch (rebase, amend) is pstack's business. `dev`, `main` and release tags are never rewritten.
 - **Bootstrap** creates only `refs/heads/dev`, at an exact prepared commit, on an empty target. It never adopts or overwrites a nonempty repository.
 - **Acceptance** of the integrated commit C needs two things:

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 import tempfile
@@ -352,6 +353,8 @@ def _pstack(args) -> int:
         "loads them only when started with it; no client, consumer or account file was changed.",
         f"entry     {report['entry']}  ({'created' if report['writes'] else 'already present'}; re-verified)",
         f"activate  {activate}",
+        *([f"          or, in a desktop saved local environment: CLAUDE_CODE_PLUGIN_DIRS={os.pathsep.join(paths)}"]
+          if args.client == "claude-code" else []),
         f"handshake the mrs-handshake skill must answer exactly: {report['handshake']}",
         "          Another line, or no such skill, means this session has not loaded this delivery: relaunch or reload.",
     ])
