@@ -1,4 +1,4 @@
-"""Connecting an existing repository and upgrading a consumer's selection, by the procedure in docs/connect.md."""
+"""Connecting an existing repository and upgrading a consumer's selection, by the procedure in docs/guide.md."""
 
 import json
 import os
@@ -10,8 +10,8 @@ from tests.support import DEV, MAIN, ROOT, out, refs, selector, shared_snapshot,
 
 
 def route_section() -> str:
-    """The AGENTS.md section that docs/connect.md tells a consumer to add, exactly as documented."""
-    lines = (ROOT / "docs" / "connect.md").read_text(encoding="utf-8").splitlines()
+    """The AGENTS.md section that docs/guide.md tells a consumer to add, exactly as documented."""
+    lines = (ROOT / "docs" / "guide.md").read_text(encoding="utf-8").splitlines()
     start = lines.index("   ```markdown") + 1
     return "\n".join(line[3:] for line in lines[start:lines.index("   ```", start)]) + "\n"
 

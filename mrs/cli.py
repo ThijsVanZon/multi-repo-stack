@@ -182,10 +182,12 @@ def _assess(args) -> int:
     meaning = {acceptance.SUFFICIENT: "every required pair passed and a PASS non-author verdict binds exact C",
                acceptance.INCOMPLETE: "not accepted; required evidence or the verdict is missing",
                acceptance.REFUSED: "not accepted; the evidence or verdict does not hold for exact C"}
-    _print({"status": result.status, "candidate": result.candidate, "problems": result.problems,
-            "missing": result.missing, "acceptance": result.payload}, args.json, [
+    _print({"status": result.status, "candidate": result.candidate, "criteria": result.criteria,
+            "problems": result.problems, "missing": result.missing, "acceptance": result.payload}, args.json, [
         f"ASSESSMENT {result.status}: {meaning[result.status]}",
         f"candidate {result.candidate}",
+        *([f"criteria  identity={result.criteria['identity']}  previous={result.criteria['previous']}"]
+          if result.criteria else []),
         *[f"refused   {problem}" for problem in result.problems],
         *[f"missing   {item}" for item in result.missing],
     ])
@@ -347,7 +349,7 @@ def _pstack(args) -> int:
         return REFUSED
     paths = report["plugin_paths"]
     activate = ("claude " + " ".join(f'--plugin-dir "{path}"' for path in paths) if args.client == "claude-code"
-                else "a workspaceOpen hook returning pluginPaths " + ", ".join(paths) + " (docs/connect.md)")
+                else "a workspaceOpen hook returning pluginPaths " + ", ".join(paths) + " (docs/guide.md)")
     _print(report, args.json, [
         f"PSTACK STAGED for {args.client}: the pinned pstack bytes, verified, in an immutable cache entry. A client "
         "loads them only when started with it; no client, consumer or account file was changed.",

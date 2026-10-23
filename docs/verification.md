@@ -90,6 +90,8 @@ Each test's docstring names the contract row it exercises. Every assertion reads
 - **Provider:** behavior established through separately authorized tests.
 - **Independent verification:** a non-author verdict on the integrated release candidate.
 
+**pstack pin review.** Before each release, compare the pstack pin with `cursor/plugins` `main`: fetch `refs/heads/main` into a scratch bare repository, then `git merge-base --is-ancestor <pin> FETCH_HEAD` (0: `main` contains the pin) and `git diff --exit-code --stat <pin> FETCH_HEAD -- pstack harness/pstack` (0: nothing changed; 1: changed). Any other exit, or a failed fetch, is an unknown result and says nothing about the clean pinned checkout that preflight verifies. A change is evaluated against `dev`: what of it touches what the tool or these documents rely on (tree paths, manifests, skills, hooks, the adapted workflow). Upgrading is a decision, never automatic, and the pin moves only through its own reviewed task, with its compatibility work, before the release candidate.
+
 `assess` enforces the runtime pairs and the verdict. Agent and provider evidence reach acceptance only through that verdict, which must accept or reject each reused observation.
 
 ## Release page
