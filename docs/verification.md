@@ -83,7 +83,7 @@ Each test's docstring names the contract row it exercises. Every assertion reads
 ## Release gates
 
 - **Runtime:** a passing `suite` record from native Windows, Linux and macOS for the same exact commit. The read-only workflow above is the intended route.
-- **Agent integration**, only when the entry path changed. Run `git diff --quiet <previous release's C> <C> -- AGENTS.md docs/context.md docs/lifecycle.md docs/guide.md mrs/__main__.py mrs/cli.py mrs/sources.py mrs/config.py mrs/git.py`.
+- **Agent integration**, only when the entry path changed. Run `git diff --quiet <previous release's C> <C> -- AGENTS.md docs mrs multi-repo-stack.json`.
   - Exit 0: the entry path is unchanged. The verdict records that command and its result; no observation is needed.
   - Exit 1, any other exit, or a first release: one fresh session on C, in a harness this project uses, entering a lifecycle consumer that selects C. It reads `AGENTS.md`, runs preflight, loads the routed docs, reruns preflight with `--expect` after an explicit resume, and invokes the `mrs-handshake` skill. The verdict names the harness and what the session did.
 - **Provider:** behavior established through separately authorized tests.
