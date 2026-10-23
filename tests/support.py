@@ -36,8 +36,11 @@ RELEASER = Identity("Fixture Releaser", "fixture-releaser@example.invalid")
 # Hostile ambient settings for every test: anything not suppressed would publish extra refs or repositories.
 # Every Git process a test starts (helpers, the kernel, CLI and hook children) may use only the file
 # transport, set by this test-owned configuration and by the environment setUp itself installs, so an
-# adversarial redirection can never reach the network.
-AMBIENT_GLOBAL_CONFIG = """[push]
+# adversarial redirection can never reach the network. Auto-maintenance is off, so no detached Git process
+# changes a fixture repository while a test copies it.
+AMBIENT_GLOBAL_CONFIG = """[maintenance]
+\tauto = false
+[push]
 \tfollowTags = true
 \trecurseSubmodules = on-demand
 [protocol]
