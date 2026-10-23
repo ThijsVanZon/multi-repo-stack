@@ -65,7 +65,7 @@ Lifecycle adoption of a repository with existing content is not this procedure. 
    ```
 
    `inspect` must report EMPTY first, and LIFECYCLE with the active line afterwards.
-4. **Provider settings**, which the tool cannot see: confirm the default branch is `dev` (GitHub makes the first pushed branch the default), then set up Protection as `docs/lifecycle.md` describes.
+4. **Provider settings**, which the tool cannot see: confirm the default branch is `dev` (GitHub makes the first pushed branch the default), then set up Protection (`docs/lifecycle.md`). On GitHub: one ruleset on `dev` and `main` with Restrict deletions and Block force pushes, no bypass; one on `dev` with Require a pull request (squash only) and Require status checks to pass (the repository's own PR checks, branch up to date); one on `main` with Restrict creations and Restrict updates. The last two have Repository admin as their only bypass actor, so the release operator must be an admin. Also turn on Automatically delete head branches. Private repositories on GitHub Free have no rulesets: record the deviation in `AGENTS.md`, and `dev` and `main` are then guarded only by the operators' discipline.
 5. **Private targets.** The tool runs Git with prompts disabled, so the target needs a credential helper that answers without prompting, or an SSH key.
 
 ## Hosted checks for a lifecycle consumer
@@ -93,7 +93,7 @@ On a private target, the tool's own Git needs credentials: for example, a global
   ln -sfn "$entry" /opt/mrs/current
   ```
 
-  The environment sets `CLAUDE_CODE_PLUGIN_DIRS` to `/opt/mrs/current/pstack:/opt/mrs/current/mrs-handshake`. The link is the container's own, made fresh for each session and shared with no other selection; a refused sync leaves none, so the handshake fails. The environment is yours, not the repository's, and restates the shared commit: choose it only for this repository's sessions.
+  The environment sets `CLAUDE_CODE_PLUGIN_DIRS` to `/opt/mrs/current/pstack:/opt/mrs/current/mrs-handshake`. The environment caches the script's result for later sessions, so the link is that environment's own and serves no other selection; a refused sync leaves none, so the handshake fails. The environment is yours, not the repository's, and restates the shared commit: choose it only for this repository's sessions.
 - **Cursor** loads `pstack/` through a `workspaceOpen` hook that returns `pluginPaths`. With `--client cursor`, `--hook` prints exactly that and exits 0, or prints `{}` on a refusal, so the workspace opens without the delivery.
 - **Handshake.** Have the agent invoke the `mrs-handshake` skill, and compare what the skill returns with the line sync printed in your terminal. Keep that line out of the session, since an agent could repeat it. A Skill call that returns the same line shows that this session loaded this delivery; another line, or no such skill, means it did not. It shows that one skill of this delivery loaded, not that every skill did, and it cannot rule out another pstack source delivered to the account or organization.
 
@@ -105,7 +105,7 @@ The Cursor hook is optional and installed by a person, never by the tool. It goe
 
 ## Check for an update (manual, read-only)
 
-Nothing notifies a consumer or changes its selection; this check is manual. To check on demand, fetch into a scratch bare repository (`git init --bare <scratch>`) outside every checkout, with `<selected>` the commit your selector names and `<N>` a release that `inspect` lists:
+Nothing changes a consumer's selection. To be notified of new releases, watch the shared repository on GitHub with Watch → Custom → Releases. To check on demand, fetch into a scratch bare repository (`git init --bare <scratch>`) outside every checkout, with `<selected>` the commit your selector names and `<N>` a release that `inspect` lists:
 
 ```text
 python -I -B <shared checkout>/mrs inspect --remote <shared repository> --json
