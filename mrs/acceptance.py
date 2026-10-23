@@ -52,6 +52,7 @@ class Assessment:
     problems: list[str] = field(default_factory=list)  # why it is REFUSED
     missing: list[str] = field(default_factory=list)  # what keeps it INCOMPLETE
     payload: dict | None = None  # the receipt's acceptance, only when SUFFICIENT
+    criteria: dict | None = None  # the identity and previous criteria a verdict must state
 
 
 def _json(data: bytes, what: str):
@@ -279,6 +280,7 @@ def assess(store, observed, candidate: str, records: list[bytes], attestation: b
         return result
     facts = {"repository": selection.repository, "candidate": candidate, "version": str(observed.active),
              "criteria": selection.criteria, "shared": shared, "pstack": pinned}
+    result.criteria = {"identity": selection.criteria, "previous": previous}
     parsed, passed = [], set()
     for index, data in enumerate(records):
         try:

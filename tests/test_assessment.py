@@ -226,6 +226,8 @@ class AssessmentTests(ConsumerTestCase):
         self.assertEqual((code, assessment["status"]), (1, "INCOMPLETE"))
         self.assertEqual(assessment["missing"],
                          ["no non-author verdict on exact C; 1 proposed reused observation(s) undecided"])
+        self.assertEqual(assessment["criteria"],  # what a verifier's verdict must state
+                         {"identity": json.loads(record.read_text(encoding="utf-8"))["criteria"], "previous": None})
         refusals = {
             "undecided": (self.verdict(record), proposals,
                           "proposed reuse 'agents-md-fresh-entry' is not decided by the verdict"),
