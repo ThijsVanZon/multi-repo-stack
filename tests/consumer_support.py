@@ -102,15 +102,13 @@ class ConsumerTestCase(GitTestCase):
         path.write_text(json.dumps(value, indent=2), encoding="utf-8")
         return path
 
-    def assess(self, target: Path, records, attestation: dict | None = None, reuse: list | None = None,
+    def assess(self, target: Path, records, attestation: dict | None = None,
                name: str = "assessment") -> tuple[int, dict]:
         args = ["assess", "--repository", target, "--pstack", self.pstack()]
         for record in records:
             args += ["--record", record]
         if attestation is not None:
             args += ["--attestation", self.write_json(f"{name} verdict.json", attestation)]
-        if reuse is not None:
-            args += ["--reuse", self.write_json(f"{name} reuse.json", reuse)]
         return self.tool(*args)
 
     def verdict(self, record: Path, **changes) -> dict:
@@ -130,7 +128,7 @@ class ConsumerTestCase(GitTestCase):
         return verdict
 
     def checked_prepare(self, target: Path, name: str, candidate: str, records, attestation: dict | None,
-                        reuse: list | None = None, now: datetime = NOW) -> dict:
+                        now: datetime = NOW) -> dict:
         """The kernel's checked path, run from the clean shared snapshot like a releaser's selected tool.
         Returns the operation, or {"refused": code, "detail": ...}."""
         code = ("import json, sys; from datetime import datetime; from pathlib import Path; "
@@ -139,7 +137,7 @@ class ConsumerTestCase(GitTestCase):
                 "try:\n"
                 "    print(json.dumps(transactions.prepare_accepted_release(remote=Path(a['target']), "
                 "work=Path(a['work']), candidate=a['candidate'], records=[read(p) for p in a['records']], "
-                "attestation=read(a['attestation']), proposals=read(a['reuse']), pstack=Path(a['pstack']), "
+                "attestation=read(a['attestation']), pstack=Path(a['pstack']), "
                 "identity=transactions.Identity('Fixture Releaser', 'fixture-releaser@example.invalid'), "
                 "now=datetime.fromisoformat(a['now']))))\n"
                 "except transactions.Refused as exc:\n"
@@ -147,7 +145,6 @@ class ConsumerTestCase(GitTestCase):
         payload = {"target": str(target), "work": str(self.tmp / name), "candidate": candidate,
                    "records": [str(record) for record in records], "pstack": str(self.pstack()),
                    "attestation": str(self.write_json(f"{name} verdict.json", attestation)) if attestation else None,
-                   "reuse": str(self.write_json(f"{name} reuse.json", reuse)) if reuse is not None else None,
                    "now": now.isoformat()}
         proc = subprocess.run([sys.executable, "-I", "-B", "-c", code, str(shared_snapshot()[0]), json.dumps(payload)],
                               capture_output=True)

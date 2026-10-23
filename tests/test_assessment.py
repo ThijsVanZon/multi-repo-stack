@@ -208,48 +208,38 @@ class AssessmentTests(ConsumerTestCase):
         self.assertEqual((code, assessment["status"]), (0, "SUFFICIENT"), assessment)
         self.assertEqual(assessment["acceptance"]["verdict"], accepted)
 
-    def test_reused_observations_need_the_verdict_and_never_replace_runtime_records(self):
-        """Verdict and reuse: an owner-proposed reused observation is undecided without a verdict, refused
-        when the verdict omits it, decides another or the proposal claims owner approval; accepted or rejected
-        by the verdict it is recorded with its true older source; it never stands in for a runtime record."""
+    def test_reused_observations_are_the_verdicts_record_and_never_replace_runtime_records(self):
+        """Verdict and reuse: a reused observation must name its id, exact source commit, harness and scope;
+        accepted or rejected by the verdict it is recorded with its true older source; it never stands in for a
+        runtime record."""
         target, _, b = self.consumer("research", RESEARCH)
         c = self.integrate(target, {"NOTES.md": "integrated after the observation\n"}, "Integrate a task")
         _, _, record = self.collect(target, "research")
         observation = {"id": "agents-md-fresh-entry", "source_commit": b,
                        "harness": "SIMULATED: fixture agent harness", "scope": "fresh AGENTS.md discovery"}
-        proposals = [observation]
 
         def decided(decision, item=observation):
             return [{"observation": item, "decision": decision, "rationale": "SIMULATED: AGENTS.md is unchanged"}]
 
-        code, assessment = self.assess(target, [record], None, proposals)
+        code, assessment = self.assess(target, [record])
         self.assertEqual((code, assessment["status"]), (1, "INCOMPLETE"))
-        self.assertEqual(assessment["missing"],
-                         ["no non-author verdict on exact C; 1 proposed reused observation(s) undecided"])
+        self.assertEqual(assessment["missing"], ["no non-author verdict on exact C"])
         self.assertEqual(assessment["criteria"],  # what a verifier's verdict must state
                          {"identity": json.loads(record.read_text(encoding="utf-8"))["criteria"], "previous": None})
-        refusals = {
-            "undecided": (self.verdict(record), proposals,
-                          "proposed reuse 'agents-md-fresh-entry' is not decided by the verdict"),
-            "another observation": (self.verdict(record, reuse=decided("accepted", dict(observation, id="other"))),
-                                    proposals, "the verdict decides reuse 'other' that was not proposed"),
-            "owner approval claimed": (self.verdict(record), [dict(observation, approved_by="owner")],
-                                       "must name its id, exact source commit, harness and scope"),
-        }
-        for name, (verdict, offered, problem) in refusals.items():
-            with self.subTest(name):
-                code, assessment = self.assess(target, [record], verdict, offered, name=name)
-                self.assertEqual((code, assessment["status"]), (3, "REFUSED"), assessment)
-                self.assertTrue(any(problem in found for found in assessment["problems"]), assessment["problems"])
+        code, assessment = self.assess(target, [record], self.verdict(
+            record, reuse=decided("accepted", dict(observation, approved_by="owner"))), name="owner approval claimed")
+        self.assertEqual((code, assessment["status"]), (3, "REFUSED"), assessment)
+        self.assertTrue(any("must name its id, exact source commit, harness and scope" in found
+                            for found in assessment["problems"]), assessment["problems"])
         for decision in ("accepted", "rejected"):
             with self.subTest(decision):
                 code, assessment = self.assess(target, [record], self.verdict(record, reuse=decided(decision)),
-                                               proposals, name=decision)
+                                               name=decision)
                 self.assertEqual((code, assessment["status"]), (0, "SUFFICIENT"), assessment)
                 [kept] = assessment["acceptance"]["verdict"]["reuse"]
                 self.assertEqual((kept["decision"], kept["observation"]["source_commit"]), (decision, b))
                 self.assertNotEqual(b, c, "the reused observation keeps its older identity, not C")
-        code, assessment = self.assess(target, [], self.verdict(record, reuse=decided("accepted")), proposals,
+        code, assessment = self.assess(target, [], self.verdict(record, reuse=decided("accepted")),
                                        name="reuse without records")
         self.assertEqual((code, assessment["status"]), (1, "INCOMPLETE"))
         self.assertEqual(assessment["missing"], [f"no passing record for synthetic-slope/{NATIVE} on {NATIVE}"])
