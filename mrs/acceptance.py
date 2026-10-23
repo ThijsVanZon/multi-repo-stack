@@ -4,9 +4,9 @@ Passing checks are check evidence only. An assessment is SUFFICIENT when every (
 that C's own criteria require has a passing record from a runner on that environment's native OS, every
 record binds this repository, C, N, C's criteria identity and the selected shared/pstack sources, and a PASS
 verdict from a declared non-author binds the same C, N and criteria, addresses criteria changes since the
-previous release (or the frozen intent at a first release) and leaves no limitation unresolved. Anything absent is INCOMPLETE; anything contradictory, failed or unbound is
-REFUSED. These are content and binding checks for trusted operators: the tool cannot authenticate who wrote a
-verdict or whether its statements are true.
+previous release (or the frozen intent at a first release) and leaves no limitation unresolved. Anything
+absent is INCOMPLETE; anything contradictory, failed or unbound is REFUSED. These are content and binding checks
+for trusted operators: the tool cannot authenticate who wrote a verdict or whether its statements are true.
 
 A record counts only with the facts of an actual execution: C observed as dev at a UTC time, the runner's OS,
 platform and runtimes, an exact checkout of C, the pstack source, and for each passing result the executable,

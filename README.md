@@ -79,7 +79,7 @@ Page commands use the same codes: `0` PREPARED, COMPLETED, APPLIED or NOOP; `1` 
 - `verifier`: `relationship` (must be `non-author`), `statement` (why the verifier is a non-author) and `harness` (the actual harness, tools and substitutions).
 - `behavior` and `evidence`: what was inspected.
 - `limitations`: each one `accepted` or `unresolved`.
-- `reuse`: `[]`. Releases up to 26.2.0 recorded reused agent observations here, each `accepted` or `rejected` with a rationale and naming its `id`, exact `source_commit`, `harness` and `scope`; their receipts still validate.
+- `reuse`: `[]` under the agent-integration gate in `docs/verification.md`, which the verdict applies and the tool does not enforce. Releases up to 26.2.0 recorded reused agent observations here, so the tool still checks each entry's form: `accepted` or `rejected` with a rationale, naming its `id`, exact `source_commit`, `harness` and `scope`.
 - `verdict`: `PASS` or `FAIL`.
 
 Tests and the recipe for this project's own records: `docs/verification.md`.
