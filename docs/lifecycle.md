@@ -7,7 +7,7 @@
   - `mrs task create` creates `<active VERSION>/<task>` in your checkout, at the target's current `dev`, without checking it out. It never moves an existing branch, and changes nothing else in your checkout.
   - `mrs task check` validates a task against the target's current state: the active prefix, the name, the base, descent from the commit that opened the line, an unchanged `VERSION` and a lifecycle selector. A stacked task must contain its parent's current tip on the target.
   - A VALID result describes one observation. It locks nothing and accepts nothing. Run the check again immediately before landing; a green CI run from before `dev` moved is not that check.
-  - Task PRs land in the order they were opened, lowest number first. After each landing, the next one is brought onto the new `dev` before its check.
+  - Task PRs land in the order they were opened, lowest number first, and none is abandoned: work dropped from a PR is reverted or superseded by later commits in that PR. After each landing, the next one is brought onto the new `dev` before its check.
   - **Port** old-line work after a release: `mrs task create` makes the new-line branch, then `git cherry-pick -x <old base>..<old branch>` onto it records which commits were ported. Keep the old branch, check the new one and run the checks again. Never rename or retarget the old branch.
 - **pstack under this lifecycle** (deliberate, narrow adaptations of the pinned pstack):
   - Trunk is `dev`, not `main`, because `main` moves only by release. Root PRs target `dev`; a stacked child targets its same-line parent task branch.
