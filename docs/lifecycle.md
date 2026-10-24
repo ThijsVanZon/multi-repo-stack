@@ -17,7 +17,7 @@
 - **Bootstrap** creates only `refs/heads/dev`, at an exact prepared commit, on an empty target. It never adopts or overwrites a nonempty repository.
 - **Acceptance** of the integrated commit C needs two things:
   - a passing record for every check/environment pair that C's own `multi-repo-stack.json` requires, each collected on an isolated checkout of exactly C by a runner on that environment's native OS;
-  - a PASS verdict from a separately commissioned non-author, bound to exact C and its criteria.
+  - a PASS verdict from a separately commissioned non-author, neither the session that wrote the change nor whoever directs and approves it, bound to exact C and its criteria.
 
   Passing checks alone never accept C. Neither does a verdict on another commit or on a PR merge.
 - **Release** promotes the exact integrated commit C in one guarded atomic push, with explicit leases, `--no-follow-tags`, `--recurse-submodules=no` and no fallback:
@@ -29,4 +29,3 @@
 - A lost response stays UNKNOWN until read-only reconciliation. Retries reuse the exact prepared tag and D. A mixed state stops for a separately reviewed repair.
 - These all block lifecycle mutation: foreign version-shaped tags, malformed receipts, a `main` without a contract release, and inconsistent or unrelated history.
 - **Patches.** Releases with `PATCH` above 0 are unsupported. Ship an urgent fix as an ordinary task of the active line and release that line. A patch tag or `main` move made by hand leaves `mrs inspect` UNSUPPORTED and blocks every later lifecycle mutation until a separately reviewed repair.
-- README.md records which of these mechanisms this revision implements.

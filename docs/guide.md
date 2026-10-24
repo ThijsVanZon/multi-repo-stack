@@ -93,7 +93,7 @@ On a private target, the tool's own Git needs credentials: for example, a global
   ln -sfn "$entry" /opt/mrs/current
   ```
 
-  The environment sets `CLAUDE_CODE_PLUGIN_DIRS` to `/opt/mrs/current/pstack:/opt/mrs/current/mrs-handshake`. The environment caches the script's result for later sessions, so the link is that environment's own and serves no other selection; a refused sync leaves none, so the handshake fails. The environment is yours, not the repository's, and restates the shared commit: choose it only for this repository's sessions.
+  The environment sets `CLAUDE_CODE_PLUGIN_DIRS` to `/opt/mrs/current/pstack:/opt/mrs/current/mrs-handshake`. The environment caches the script's result for later sessions, so the link is that environment's own and serves no other selection; a refused sync fails the setup script, so no session starts. The environment is yours, not the repository's, and restates the shared commit: choose it only for this repository's sessions.
 - **Cursor** loads `pstack/` through a `workspaceOpen` hook that returns `pluginPaths`. With `--client cursor`, `--hook` prints exactly that and exits 0, or prints `{}` on a refusal, so the workspace opens without the delivery.
 - **Handshake.** Have the agent invoke the `mrs-handshake` skill, and compare what the skill returns with the line sync printed in your terminal. Keep that line out of the session, since an agent could repeat it. A Skill call that returns the same line shows that this session loaded this delivery; another line, or no such skill, means it did not. It shows that one skill of this delivery loaded, not that every skill did, and it cannot rule out another pstack source delivered to the account or organization.
 
