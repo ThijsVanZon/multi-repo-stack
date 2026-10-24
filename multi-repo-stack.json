@@ -4,7 +4,7 @@
   "applicability": "lifecycle",
   "pstack": {
     "repository": "cursor/plugins",
-    "commit": "88d47514b82e7c44f00f2b2a72ff6dd12158038c",
+    "commit": "9580c23696ac8d7abed0c166f2f9918800afb819",
     "path": "pstack"
   },
   "checks": {
