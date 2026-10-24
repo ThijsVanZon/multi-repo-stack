@@ -121,6 +121,24 @@ class TransportQualificationTests(PageTestCase):
         self.assertEqual((stopped.exception.status, stopped.exception.reason), ("UNKNOWN", "credential"))
         self.assertEqual(len(self.stand_in.wire), 1)
 
+    def test_gh_in_the_working_directory_or_a_relative_path_entry_is_never_run(self):
+        """§4.2 credential: only absolute PATH entries name gh; a gh planted in the working directory (Windows
+        searches it implicitly) or behind a relative entry such as `.` never supplies the token."""
+        planted = self.tmp / "planted"
+        planted.mkdir()
+        fake = planted / ("gh.exe" if os.name == "nt" else "gh")
+        fake.write_bytes(b"#!/bin/sh\necho gho_PlantedFixtureToken\n")
+        fake.chmod(0o755)
+        cwd = os.getcwd()
+        os.chdir(planted)
+        try:
+            for name, path in (("working directory", os.environ["PATH"]),
+                               ("relative entry", os.curdir + os.pathsep + os.environ["PATH"])):
+                with self.subTest(name), mock.patch.dict(os.environ, {"PATH": path}):
+                    self.assertEqual(pages.credential(), SYNTHETIC_TOKEN)
+        finally:
+            os.chdir(cwd)
+
     def test_redirects_are_never_followed(self):
         """§6.1 item 3, §4.2 no redirects, §4.3: a 3xx to any read makes it unqualified with no request to its
         Location; a 3xx to the create is its recorded answer after exactly one POST."""

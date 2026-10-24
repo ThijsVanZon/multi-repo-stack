@@ -189,29 +189,6 @@ def _materialize(checkout: Path, store: Path, commit: str) -> None:
     git.check(["-C", str(checkout), "-c", "advice.detachedHead=false", "checkout", "--quiet", "--detach", commit])
 
 
-def resolve(command: str) -> str:
-    """The native executable that `command` names on PATH, never searched in the current directory.
-    Windows batch launchers are refused: they always run through cmd.exe."""
-    extensions = [""]
-    if os.name == "nt":
-        known = [ext for ext in os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").lower().split(";") if ext]
-        extensions = [""] if os.path.splitext(command)[1].lower() in known else known
-    for folder in os.environ.get("PATH", "").split(os.pathsep):
-        if not folder or not os.path.isabs(folder):
-            continue
-        for ext in extensions:
-            path = os.path.join(folder, command + ext)
-            if os.path.isfile(path) and os.access(path, os.X_OK):
-                suffix = os.path.splitext(path)[1].lower()
-                if os.name == "nt" and suffix in (".bat", ".cmd"):
-                    raise Refused(f"{command!r} resolves to the batch launcher {os.path.basename(path)}, which "
-                                  "runs through cmd.exe; batch launchers are unsupported")
-                if os.name == "nt" and suffix not in (".exe", ".com"):
-                    raise Refused(f"{command!r} resolves to {os.path.basename(path)}, not a native executable")
-                return os.path.abspath(path)
-    raise Refused(f"prerequisite missing: {command!r} is not found on PATH")
-
-
 def _run(folder: Path, store: Path, candidate: str, entries, name: str, label: str,
          check: config.Check) -> tuple[dict, bytes]:
     checkout, evidence = folder / "checkout", folder / "evidence"
@@ -234,14 +211,14 @@ def _run(folder: Path, store: Path, candidate: str, entries, name: str, label: s
     env = {key: value for key, value in os.environ.items() if key not in git.SCRUBBED_ENV}
     env[EVIDENCE_ENV] = str(evidence / _EVIDENCE_NAME)
     try:
-        executable = resolve(check.argv[0])
+        executable = git.resolve(check.argv[0])
         with open(executable, "rb") as handle:
             result["executable"] = {"name": os.path.basename(executable),
                                     "sha256": hashlib.file_digest(handle, "sha256").hexdigest()}
         result["started"] = _utc()
         proc = subprocess.run(list(check.argv), executable=executable, cwd=checkout, env=env,
                               stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    except (Refused, OSError) as exc:  # a missing or unsupported prerequisite: recorded, not run
+    except (git.GitError, OSError) as exc:  # a missing or unsupported prerequisite: recorded, not run
         result["reason"] = str(exc)
         return result, b""
     result.update(finished=_utc(), exit=proc.returncode,

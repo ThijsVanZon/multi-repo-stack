@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import functools
 import os
-import shutil
 import subprocess
 import urllib.parse
 from dataclasses import dataclass
@@ -24,14 +23,32 @@ class GitError(Exception):
     pass
 
 
+def resolve(command: str) -> str:
+    """The native executable that `command` names on an absolute PATH entry; the current directory and relative
+    entries are never searched. Windows batch launchers are refused: they always run through cmd.exe."""
+    extensions = [""]
+    if os.name == "nt":
+        known = [ext for ext in os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").lower().split(";") if ext]
+        extensions = [""] if os.path.splitext(command)[1].lower() in known else known
+    for folder in os.environ.get("PATH", "").split(os.pathsep):
+        if not folder or not os.path.isabs(folder):
+            continue
+        for ext in extensions:
+            path = os.path.join(folder, command + ext)
+            if os.path.isfile(path) and os.access(path, os.X_OK):
+                suffix = os.path.splitext(path)[1].lower()
+                if os.name == "nt" and suffix in (".bat", ".cmd"):
+                    raise GitError(f"{command!r} resolves to the batch launcher {os.path.basename(path)}, which "
+                                   "runs through cmd.exe; batch launchers are unsupported")
+                if os.name == "nt" and suffix not in (".exe", ".com"):
+                    raise GitError(f"{command!r} resolves to {os.path.basename(path)}, not a native executable")
+                return os.path.abspath(path)
+    raise GitError(f"prerequisite missing: {command!r} is not found on PATH")
+
+
 @functools.lru_cache(maxsize=None)
 def executable() -> str:
-    path = shutil.which("git")
-    if path is None:
-        raise GitError("git executable not found on PATH")
-    if Path(path).suffix.lower() in (".bat", ".cmd"):
-        raise GitError(f"unsupported batch launcher for git: {path}")
-    return os.path.abspath(path)
+    return resolve("git")
 
 
 @dataclass(frozen=True)
