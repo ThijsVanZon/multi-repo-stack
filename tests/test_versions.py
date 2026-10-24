@@ -21,7 +21,7 @@ class LauncherTests(unittest.TestCase):
                                               "PATHEXT": ".CMD;.EXE"}):
                 with self.assertRaises(git.GitError) as caught:
                     git.executable()
-            self.assertIn("unsupported batch launcher", str(caught.exception))
+            self.assertIn("resolves to the batch launcher git.cmd", str(caught.exception))
 
 
 class ResolutionTests(unittest.TestCase):

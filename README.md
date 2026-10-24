@@ -42,7 +42,7 @@ Everything below is exercised by tests against disposable local repositories. Ho
 
 ## Use
 
-Requires Python 3.11 or newer and Git on PATH; `page apply` and `page reconcile` also need gh, as the credential source. Only the standard library is used. Run the tool from the selected checkout with an explicit interpreter, without relying on shebangs:
+Requires Python 3.11 or newer and Git on PATH; `page apply` and `page reconcile` also need gh, as the credential source. Git, gh and check commands are found only in absolute PATH entries, never in the current directory, and batch launchers are refused. Only the standard library is used. Run the tool from the selected checkout with an explicit interpreter, without relying on shebangs:
 
 ```text
 python -I -B <shared checkout>/mrs preflight --consumer <consumer checkout> --pstack <cursor/plugins checkout at the pinned commit> [--json] [--expect <earlier --json output>]

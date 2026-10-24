@@ -16,7 +16,6 @@ import http.client
 import json
 import os
 import re
-import shutil
 import ssl
 import subprocess
 import tempfile
@@ -105,9 +104,10 @@ def call(api: str, token: str, method: str, target: str, body: bytes | None = No
 def credential() -> str:
     """The operator's github.com token from `gh auth token`; refused unless it is one header-safe line. Neither
     the token nor gh's output is ever repeated in a result."""
-    gh = shutil.which("gh")
-    if gh is None or Path(gh).suffix.lower() in (".bat", ".cmd"):
-        raise Stop("UNKNOWN", "credential", "gh is not on PATH; the token comes from `gh auth token`")
+    try:
+        gh = git.resolve("gh")
+    except git.GitError as exc:
+        raise Stop("UNKNOWN", "credential", f"{exc}; the token comes from `gh auth token`") from None
     try:
         got = subprocess.run([gh, "auth", "token", "--hostname", API_HOST], capture_output=True, timeout=60)
     except (OSError, subprocess.TimeoutExpired) as exc:
