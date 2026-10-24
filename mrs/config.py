@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -55,9 +56,11 @@ def strict_json(data: bytes):
             raise ValueError("duplicate keys")
         return dict(pairs)
 
-    def constant(name):
-        raise ValueError(f"{name} is not JSON")
-    return json.loads(data.decode("utf-8"), object_pairs_hook=unique, parse_constant=constant)
+    def finite(text):  # NaN and Infinity, and literals such as 1e400 that only overflow to it
+        if not math.isfinite(value := float(text)):
+            raise ValueError(f"{text} is not a finite number")
+        return value
+    return json.loads(data.decode("utf-8"), object_pairs_hook=unique, parse_constant=finite, parse_float=finite)
 
 
 def _object(value, keys: set[str], where: str) -> dict:
