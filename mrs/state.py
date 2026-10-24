@@ -1,4 +1,9 @@
-"""Read-only observation of a target and recognition of contract release state."""
+"""Read-only observation of a target and recognition of contract release state.
+
+Absent refs are told from UNKNOWN: hidden refs, broken refs, missing history, unreadable Git configuration and
+unparseable URLs are UNKNOWN, and a target that Git would redirect is refused. A contract release tag is annotated,
+directly on C and embeds a canonical receipt bound to exact object IDs; each receipt is re-validated against what C
+provides and the retained release history."""
 
 from __future__ import annotations
 

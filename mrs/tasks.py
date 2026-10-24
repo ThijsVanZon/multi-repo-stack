@@ -6,8 +6,8 @@ A task branch is `<active VERSION>/<task>`, with a lowercase kebab-case task nam
 root task targets dev. A stacked task targets a same-line parent task branch on the target and contains that
 parent's current tip. Every task descends from the commit that opened the active line (the latest release's
 next-line commit), or, before a first release, shares history with dev. It keeps the active VERSION and a
-lifecycle selector for the same repository. A verdict describes the target as observed when it was made, so
-check again immediately before landing.
+lifecycle selector for the same repository. Creation refuses a branch that exists in the checkout or on the
+target. A verdict describes the target as observed when it was made, so check again immediately before landing.
 """
 
 from __future__ import annotations

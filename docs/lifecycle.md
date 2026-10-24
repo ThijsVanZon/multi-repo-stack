@@ -7,7 +7,8 @@
   - `mrs task create` creates `<active VERSION>/<task>` in your checkout, at the target's current `dev`, without checking it out. It never moves an existing branch, and changes nothing else in your checkout.
   - `mrs task check` validates a task against the target's current state: the active prefix, the name, the base, descent from the commit that opened the line, an unchanged `VERSION` and a lifecycle selector. A stacked task must contain its parent's current tip on the target.
   - A VALID result describes one observation. It locks nothing and accepts nothing. Run the check again immediately before landing; a green CI run from before `dev` moved is not that check.
-  - **Port** old-line work after a release: `mrs task create --task <task>` makes the new-line branch, then `git cherry-pick -x <old base>..<old branch>` onto it records which commits were ported. Keep the old branch, check the new one and run the checks again. Never rename or retarget the old branch.
+  - Task PRs land in the order they were opened, lowest number first, and none is abandoned: work dropped from a PR is reverted or superseded by later commits in that PR. After each landing, the next one is brought onto the new `dev` before its check.
+  - **Port** old-line work after a release: `mrs task create` makes the new-line branch, then `git cherry-pick -x <old base>..<old branch>` onto it records which commits were ported. Keep the old branch, check the new one and run the checks again. Never rename or retarget the old branch.
 - **pstack under this lifecycle** (deliberate, narrow adaptations of the pinned pstack):
   - Trunk is `dev`, not `main`, because `main` moves only by release. Root PRs target `dev`; a stacked child targets its same-line parent task branch.
   - Branch names carry the active line, so a task's line is visible and checkable.
@@ -17,7 +18,7 @@
 - **Bootstrap** creates only `refs/heads/dev`, at an exact prepared commit, on an empty target. It never adopts or overwrites a nonempty repository.
 - **Acceptance** of the integrated commit C needs two things:
   - a passing record for every check/environment pair that C's own `multi-repo-stack.json` requires, each collected on an isolated checkout of exactly C by a runner on that environment's native OS;
-  - a PASS verdict from a separately commissioned non-author, bound to exact C and its criteria.
+  - a PASS verdict from a separately commissioned non-author, neither the session that wrote the change nor whoever directs and approves it, bound to exact C and its criteria.
 
   Passing checks alone never accept C. Neither does a verdict on another commit or on a PR merge.
 - **Release** promotes the exact integrated commit C in one guarded atomic push, with explicit leases, `--no-follow-tags`, `--recurse-submodules=no` and no fallback:
@@ -29,4 +30,3 @@
 - A lost response stays UNKNOWN until read-only reconciliation. Retries reuse the exact prepared tag and D. A mixed state stops for a separately reviewed repair.
 - These all block lifecycle mutation: foreign version-shaped tags, malformed receipts, a `main` without a contract release, and inconsistent or unrelated history.
 - **Patches.** Releases with `PATCH` above 0 are unsupported. Ship an urgent fix as an ordinary task of the active line and release that line. A patch tag or `main` move made by hand leaves `mrs inspect` UNSUPPORTED and blocks every later lifecycle mutation until a separately reviewed repair.
-- README.md records which of these mechanisms this revision implements.

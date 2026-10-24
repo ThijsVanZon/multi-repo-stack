@@ -1,8 +1,8 @@
 """Commands: preflight, inspect, collect, assess, task, prepare, operation, page and pstack. Only `operation apply`
 publishes lifecycle refs: it applies one prepared bootstrap or release to its target. Only `page apply` creates a
 GitHub Release page: the one create of one prepared page operation. `prepare` and `page prepare` write only a new
-operation folder, `task create` adds one new branch to the caller's local checkout, `pstack sync` adds only new
-cache entries, and everything else is read-only toward targets."""
+operation folder, `collect` only its record and private logs, `task create` adds one new branch to the caller's
+local checkout, `pstack sync` adds only new cache entries, and everything else is read-only toward targets."""
 
 from __future__ import annotations
 

@@ -4,6 +4,8 @@
 - **Selection.** The consumer's `multi-repo-stack.json` names the exact shared commit and the applicability, `context` or `lifecycle`. Use one clean external checkout per selected commit for the whole task, never switch it in place, and never copy shared files or pstack into the consumer. Checkout locations are execution inputs, not committed paths.
 - **Entry.** Run preflight from the selected checkout: `python -I -B <shared checkout>/mrs preflight --consumer <consumer> --pstack <pstack checkout>`. Load only the files it lists. Rerun it with `--expect` after resuming or long operations. Any refusal blocks dependent work.
 - **Updates** are explicit consumer changes, made by the procedures in the shared checkout's `docs/guide.md`. A shared release never changes a consumer by itself.
+- **Substance.** Commit the minimum necessary. Every committed line is a permanent liability that must justify itself through clear product or repository value. Prefer deletion, reuse and simplification over addition, and add no speculative machinery. Minimize total system liability, not line count.
 - **Verification.** Keep one harness-neutral verification recipe, routed from `AGENTS.md`, rather than per-harness copies such as pstack's `.cursor/skills/verify-<app>/` or a project-local formal verification skill. pstack's create and maintain methods for both still apply to that recipe.
 - **Context-only consumers** keep their own branch, version and release rules. Lifecycle operations refuse them.
+- **Approval.** Content lands only with the approval of the person who directs the work.
 - Neither a selector nor these instructions grant any push, release, provider or downstream authority.
