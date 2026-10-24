@@ -42,6 +42,8 @@ Their locations are execution inputs; never commit them. Use one checkout per se
 5. **Commit only those two files** locally. The consumer's history, branches, tags, version and every other file stay as they were.
 6. **Run preflight** from the shared checkout; it reads the committed selector. It must report `applicability=context` and list only `docs/context.md`. Then land the commit through the consumer's own workflow.
 
+To enforce Pre-merge review (`docs/context.md`) on GitHub, land, through the consumer's own workflow, a workflow of its own that does what this repository's `.github/workflows/review.yml` does, then require its `pre-merge review` status, with no bypass, in a ruleset on the branch PRs merge into.
+
 Lifecycle adoption of a repository with existing content is not this procedure. It needs a separately reviewed transition to a compatible state.
 
 ## Bootstrap a new lifecycle repository
@@ -65,7 +67,7 @@ Lifecycle adoption of a repository with existing content is not this procedure. 
    ```
 
    `inspect` must report EMPTY first, and LIFECYCLE with the active line afterwards.
-4. **Provider settings**, which the tool cannot see: confirm the default branch is `dev` (GitHub makes the first pushed branch the default), then set up Protection (`docs/lifecycle.md`). On GitHub: one ruleset on `dev` and `main` with Restrict deletions and Block force pushes, no bypass; one on `dev` with Require a pull request (squash only) and Require status checks to pass (the repository's own PR checks, branch up to date); one on `main` with Restrict creations and Restrict updates. The last two have Repository admin as their only bypass actor, so the release operator must be an admin. Also turn on Automatically delete head branches. Private repositories on GitHub Free have no rulesets: record the deviation in `AGENTS.md`, and `dev` and `main` are then guarded only by the operators' discipline.
+4. **Provider settings**, which the tool cannot see: confirm the default branch is `dev` (GitHub makes the first pushed branch the default), then set up Protection (`docs/lifecycle.md`). On GitHub: one ruleset on `dev` and `main` with Restrict deletions and Block force pushes, no bypass; one on `dev` with Require a pull request (squash only) and Require status checks to pass (the repository's own PR checks and `pre-merge review`, branch up to date); one on `main` with Restrict creations and Restrict updates. `pre-merge review` comes from a workflow of the consumer's own that does what this repository's `.github/workflows/review.yml` does. The last two have one bypass actor: a deploy key with write access that only the release operator holds, so releases push through its ssh URL. Nobody else bypasses, admins and sessions acting for them included. Also turn on Automatically delete head branches. Private repositories on GitHub Free have no rulesets: record the deviation in `AGENTS.md`, and `dev` and `main` are then guarded only by the operators' discipline.
 5. **Private targets.** The tool runs Git with prompts disabled, so the target needs a credential helper that answers without prompting, or an SSH key.
 
 ## Hosted checks for a lifecycle consumer
