@@ -95,7 +95,7 @@ Each test's docstring names the contract row it exercises. Every assertion reads
 
 ## Release page
 
-Title `multi-repo-stack <N>`. Notes: a one-sentence summary, then `### Included`, `### Release identity and verification` (tag, accepted commit C, annotated tag object, Git release date, D that opened the next line, C's native runtime evidence and non-author PASS, and "The complete accepted payload is embedded in the annotated tag receipt.") and `### Boundaries` ("Products retain their own intent, source, dependencies, tests and acceptance criteria. Shared-source upgrades are explicit consumer changes.", what this release leaves out, then the Python and Git requirement and the license). 26.1.0 is the reference.
+Title `multi-repo-stack <N>`. Notes: a one-sentence summary, then `### Included`, then, without a heading, "The exact release candidate received native runtime evidence and a non-author PASS verdict; the complete accepted payload is embedded in the annotated tag receipt." and `### Boundaries` ("Products retain their own intent, source, dependencies, tests and acceptance criteria. Shared-source upgrades are explicit consumer changes.", what this release leaves out, then the Python and Git requirement and the license). 26.1.0 is otherwise the reference.
 
 ## What a pass does not prove
 
