@@ -88,15 +88,16 @@ Each test's docstring names the contract row it exercises. Every assertion reads
   - Exit 0: the entry path is unchanged. The verdict records that command and its result; no observation is needed.
   - Exit 1, any other exit, or a first release: one fresh session on C, in a harness this project uses, entering a lifecycle consumer that selects C. It reads `AGENTS.md`, runs preflight, loads the routed docs, reruns preflight with `--expect` after an explicit resume, and invokes the `mrs-handshake` skill. The verdict names the harness and what the session did.
 - **Provider:** behavior established through separately authorized tests.
+- **Pre-merge reviews:** every commit in `git rev-list --first-parent <previous release's D>..<C>` is one PR's squash landing, and that PR had a pre-merge PASS on the head whose tree it landed. The verdict lists them. Landings made before Pre-merge review (`docs/context.md`) applied are listed with their non-author reviews instead.
 - **Pre-release review:** a non-author verdict on the integrated release candidate.
 
 **pstack pin review.** Before each release, compare the pstack pin with `cursor/plugins` `main`: fetch `refs/heads/main` into a scratch bare repository, then `git merge-base --is-ancestor <pin> FETCH_HEAD` (0: `main` contains the pin) and `git diff --exit-code --stat <pin> FETCH_HEAD -- pstack harness/pstack` (0: nothing changed; 1: changed). Any other exit, or a failed fetch, is an unknown result and says nothing about the clean pinned checkout that preflight verifies. A change is evaluated against `dev`: what of it touches what the tool or these documents rely on (tree paths, manifests, skills, hooks, the adapted workflow). Upgrading is a decision, never automatic, and the pin moves only through its own reviewed task, with its compatibility work, before the release candidate.
 
-`assess` enforces the runtime pairs and the verdict. Agent and provider evidence reach acceptance only through that verdict.
+`assess` enforces the runtime pairs and the verdict. Agent, provider and pre-merge evidence reach acceptance only through that verdict.
 
 ## Release page
 
-Title `multi-repo-stack <N>`. Notes: a one-sentence summary, then `### Included`, then, without a heading, "The exact release candidate received native runtime evidence and a non-author PASS verdict; the complete accepted payload is embedded in the annotated tag receipt." and `### Boundaries` ("Products retain their own intent, source, dependencies, tests and acceptance criteria. Shared-source upgrades are explicit consumer changes.", what this release leaves out, then the Python and Git requirement and the license). 26.1.0 is otherwise the reference.
+Title `multi-repo-stack <N>`. Notes: a one-sentence summary, then `### Included`, `### Release identity and verification` (tag, accepted commit C, annotated tag object, Git release date, D that opened the next line, then "The exact release candidate received native runtime evidence on <platforms> and a separate non-author PASS verdict. The complete accepted payload is embedded in the annotated tag receipt.") and `### Boundaries` ("Products retain their own intent, source, dependencies, tests and acceptance criteria. Shared-source upgrades are explicit consumer changes.", what this release leaves out, then the Python and Git requirement and the license). 26.2.0 is the reference.
 
 ## What a pass does not prove
 
