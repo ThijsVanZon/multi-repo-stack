@@ -160,7 +160,6 @@ def _assess(args) -> int:
     try:
         records = [Path(path).read_bytes() for path in args.record]
         attestation = Path(args.attestation).read_bytes() if args.attestation else None
-        proposals = Path(args.reuse).read_bytes() if args.reuse else None
     except OSError as exc:
         _print({"status": "REFUSED", "reason": str(exc)}, args.json, [f"ASSESSMENT REFUSED: {exc}"])
         return REFUSED
@@ -169,7 +168,7 @@ def _assess(args) -> int:
         store = Path(scratch) / "observed.git"
         git.check(["init", "--quiet", "--bare", "--template=", str(store)])
         observed = state.observe(store, args.repository)
-        result = acceptance.assess(store, observed, observed.dev, records, attestation, proposals,
+        result = acceptance.assess(store, observed, observed.dev, records, attestation,
                                    Path(args.pstack) if args.pstack else None)
     except state.Redirected as exc:
         _print({"status": "REFUSED", "reason": str(exc)}, args.json, [f"ASSESSMENT REFUSED: {exc}"])
@@ -263,7 +262,6 @@ def _prepare(args) -> int:
                 remote=args.repository, work=work, candidate=args.candidate,
                 records=[Path(path).read_bytes() for path in args.record],
                 attestation=Path(args.attestation).read_bytes() if args.attestation else None,
-                proposals=Path(args.reuse).read_bytes() if args.reuse else None,
                 pstack=Path(args.pstack) if args.pstack else None,
                 identity=transactions.Identity(match["name"], match["email"]))
     except (transactions.Refused, state.Redirected, OSError) as exc:
@@ -390,7 +388,6 @@ def main(argv: list[str] | None = None) -> int:
     ass.add_argument("--pstack", help="clean checkout of the pinned canonical pstack repository")
     ass.add_argument("--record", action="append", default=[], help="a check record from collect (repeatable)")
     ass.add_argument("--attestation", help="the separately commissioned non-author verdict on exact C")
-    ass.add_argument("--reuse", help="owner-proposed reused agent observations, each to be decided by the verdict")
     ass.add_argument("--json", action="store_true")
     ass.set_defaults(handler=_assess)
     task = commands.add_parser("task", help="create or check a task branch of a lifecycle repository's active line")
@@ -421,7 +418,6 @@ def main(argv: list[str] | None = None) -> int:
     rel.add_argument("--candidate", required=True, help="C, the full commit ID of the target's dev to release")
     rel.add_argument("--record", action="append", default=[], help="a check record from collect (repeatable)")
     rel.add_argument("--attestation", help="the separately commissioned non-author verdict on exact C")
-    rel.add_argument("--reuse", help="owner-proposed reused agent observations, each to be decided by the verdict")
     rel.add_argument("--identity", required=True, help="tagger and next-line author, 'Name <email>'")
     for sub in (boot, rel):
         sub.add_argument("--pstack", help="clean checkout of the pinned canonical pstack repository")

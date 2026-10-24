@@ -318,12 +318,12 @@ def prepare_release(*, remote: str | Path, work: Path, candidate: str, acceptanc
 
 
 def prepare_accepted_release(*, remote: str | Path, work: Path, candidate: str, records: list[bytes],
-                             attestation: bytes | None, proposals: bytes | None = None, pstack: Path | None,
+                             attestation: bytes | None, pstack: Path | None,
                              identity: Identity, now: datetime | None = None) -> dict:
     """The checked path: the receipt carries only a SUFFICIENT assessment of exactly the observed dev C, made
     from collected records and a non-author verdict by the sources C selects."""
     def assessed(store: Path, observed: state.State) -> dict:
-        result = acceptance_module.assess(store, observed, candidate, records, attestation, proposals, pstack)
+        result = acceptance_module.assess(store, observed, candidate, records, attestation, pstack)
         if result.status != acceptance_module.SUFFICIENT:
             raise Refused("acceptance", f"{result.status}: " + "; ".join(result.problems + result.missing))
         return result.payload

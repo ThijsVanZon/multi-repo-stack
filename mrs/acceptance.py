@@ -4,10 +4,9 @@ Passing checks are check evidence only. An assessment is SUFFICIENT when every (
 that C's own criteria require has a passing record from a runner on that environment's native OS, every
 record binds this repository, C, N, C's criteria identity and the selected shared/pstack sources, and a PASS
 verdict from a declared non-author binds the same C, N and criteria, addresses criteria changes since the
-previous release (or the frozen intent at a first release), decides every proposed reused observation and
-leaves no limitation unresolved. Anything absent is INCOMPLETE; anything contradictory, failed or unbound is
-REFUSED. These are content and binding checks for trusted operators: the tool cannot authenticate who wrote a
-verdict or whether its statements are true.
+previous release (or the frozen intent at a first release) and leaves no limitation unresolved. Anything
+absent is INCOMPLETE; anything contradictory, failed or unbound is REFUSED. These are content and binding checks
+for trusted operators: the tool cannot authenticate who wrote a verdict or whether its statements are true.
 
 A record counts only with the facts of an actual execution: C observed as dev at a UTC time, the runner's OS,
 platform and runtimes, an exact checkout of C, the pstack source, and for each passing result the executable,
@@ -191,7 +190,7 @@ def _observation_problem(item) -> str | None:
     return None
 
 
-def _verdict(attestation, facts: dict, previous: str | None, proposals: list | None) -> list[str]:
+def _verdict(attestation, facts: dict, previous: str | None) -> list[str]:
     """Problems that keep `attestation` from being a PASS non-author verdict on exactly this candidate."""
     if (not isinstance(attestation, dict) or set(attestation) != _ATTESTATION_KEYS
             or attestation["format"] != ATTESTATION_FORMAT):
@@ -235,11 +234,6 @@ def _verdict(attestation, facts: dict, previous: str | None, proposals: list | N
     else:
         problems += [problem for item in reuse if (problem := _observation_problem(item["observation"]))]
         decided = [item["observation"] for item in reuse]
-        if proposals is not None:
-            problems += [f"proposed reuse {item['id']!r} is not decided by the verdict"
-                         for item in proposals if item not in decided]
-            problems += [f"the verdict decides reuse {item.get('id')!r} that was not proposed"
-                         for item in decided if isinstance(item, dict) and item not in proposals]
         if any(decided.count(item) > 1 for item in decided):
             problems.append("a reused observation is decided more than once")
     if attestation["verdict"] != "PASS":
@@ -260,9 +254,9 @@ def previous_criteria(store, release) -> str | None:
 
 
 def assess(store, observed, candidate: str, records: list[bytes], attestation: bytes | None,
-           proposals: bytes | None, pstack) -> Assessment:
+           pstack) -> Assessment:
     """Assess exactly `candidate`, which must be the observed dev of a supported lifecycle state, from
-    collected records, an optional verdict and optional owner-proposed reused observations. The running tool
+    collected records and an optional verdict. The running tool
     and `pstack` must be the sources C selects, as in collection."""
     result = Assessment(REFUSED, candidate)
     if observed.kind != "LIFECYCLE" or observed.dev != candidate:
@@ -293,24 +287,13 @@ def assess(store, observed, candidate: str, records: list[bytes], attestation: b
         parsed.append(record)
         passed |= ok
     result.missing += _missing(selection, passed)
-    try:
-        proposed = _json(proposals, "proposed reuse") if proposals is not None else []
-        if not isinstance(proposed, list):
-            raise ValueError("proposed reuse must be a list of observations")
-        malformed = [problem for item in proposed if (problem := _observation_problem(item))]
-        if malformed:
-            raise ValueError("; ".join(malformed))
-    except ValueError as exc:
-        result.problems.append(str(exc))
-        proposed = []
     verdict = None
     if attestation is None:
-        result.missing.append("no non-author verdict on exact C"
-                              + (f"; {len(proposed)} proposed reused observation(s) undecided" if proposed else ""))
+        result.missing.append("no non-author verdict on exact C")
     else:
         try:
             verdict = _json(attestation, "verdict")
-            result.problems += _verdict(verdict, facts, previous, proposed)
+            result.problems += _verdict(verdict, facts, previous)
         except ValueError as exc:
             result.problems.append(str(exc))
     if result.problems:
@@ -354,4 +337,4 @@ def payload_problems(store, candidate: str, version: str, repository: str, paylo
     if pin is not None and any((source["repository"], source["commit"], source["path"])
                                != (pin.repository, pin.commit, pin.path) for source in used):
         problems.append(f"a record's pstack source is not {pin.repository}@{pin.commit} ({pin.path}), which C pins")
-    return problems + _missing(selection, passed) + _verdict(payload["verdict"], facts, criteria["previous"], None)
+    return problems + _missing(selection, passed) + _verdict(payload["verdict"], facts, criteria["previous"])

@@ -33,7 +33,7 @@ Everything below is exercised by tests against disposable local repositories. Ho
 - Pushes come from the operation's own bare store, which has no submodule repository, so `--recurse-submodules=no` is defense in depth, not a separately demonstrable guard.
 - The low-level `prepare_release` records an unjudged payload for the transaction tests and refuses one that claims the assessed format. It accepts only local bare repositories carrying the `mrs-disposable-fixture` marker, which only test code creates. Observers still recognize such receipts.
 - The tool cannot see provider rules such as branch protection, rulesets or hidden refs. It reports the push and the state it observes afterwards, and neither bypasses nor predicts provider policy. Provider behavior (atomicity, lease rejection, races, protections) is established only as far as a release's verdict records it.
-- The collector cannot run agent-integration or provider checks. They reach acceptance only through the non-author verdict, which accepts or rejects each reused observation.
+- The collector cannot run agent-integration or provider checks. They reach acceptance only through the non-author verdict.
 - Collection is trusted-repository execution, not a sandbox. Checks run with the collector's permissions and environment, minus Git variables that would redirect them to another repository, and can write anywhere those permissions allow. Evidence ownership is checked on POSIX only.
 - **Release pages: tag-disappearance race, unsolved.** If tag N is deleted between apply's classification and its create, GitHub may create a lightweight tag N at C. The tool reports DIVERGED (tag) afterwards and repairs nothing, but cannot prevent it. A grant for a real `page apply` must accept it explicitly.
 - **Release pages: live behavior unproven.** The tests use loopback stand-ins only. The one real apply, the 26.2.0 page, read back its body byte-exact. Draft visibility on the `repo`-scope path, GitHub's default latest marking and its answers to redirects and pagination are unobserved; a redirect is UNKNOWN, never followed. TLS uses Python's default trust store and proxies are unsupported, so an unverifiable trust store or a proxied-only network gives UNKNOWN. The token gh prints is trusted beyond the login and scope checks. The listing is read page by page, so a release moving between pages can be missed; other state is sampled, not locked. The claim is a local file without a folder fsync on Windows, and an operator who deletes it and reruns is outside the grant. The tag read inherits Git's redirect behavior. Publishing can trigger release workflows, which the tool does not check.
@@ -48,11 +48,11 @@ Requires Python 3.11 or newer and Git on PATH; `page apply` and `page reconcile`
 python -I -B <shared checkout>/mrs preflight --consumer <consumer checkout> --pstack <cursor/plugins checkout at the pinned commit> [--json] [--expect <earlier --json output>]
 python -I -B <shared checkout>/mrs inspect --remote <path or URL> [--json]
 python -I -B <shared checkout>/mrs collect --repository <path or URL> --pstack <pstack checkout> --out <new record file> [--json]
-python -I -B <shared checkout>/mrs assess --repository <path or URL> --pstack <pstack checkout> --record <record file> [--record ...] [--attestation <verdict file>] [--reuse <proposals file>] [--json]
+python -I -B <shared checkout>/mrs assess --repository <path or URL> --pstack <pstack checkout> --record <record file> [--record ...] [--attestation <verdict file>] [--json]
 python -I -B <shared checkout>/mrs task create --repository <path or URL> [--checkout <local checkout>] --task <task> [--json]
 python -I -B <shared checkout>/mrs task check --repository <path or URL> [--checkout <local checkout>] --branch <task branch> [--commit <commit>] [--base dev|<parent task branch>] [--json]
 python -I -B <shared checkout>/mrs prepare bootstrap --repository <path or URL> --source <local repository> --commit <B> --pstack <pstack checkout> --work <new folder> [--json]
-python -I -B <shared checkout>/mrs prepare release --repository <path or URL> --candidate <C> --pstack <pstack checkout> --record <record file> [--record ...] --attestation <verdict file> [--reuse <proposals file>] --identity "<Name> <email>" --work <new folder> [--json]
+python -I -B <shared checkout>/mrs prepare release --repository <path or URL> --candidate <C> --pstack <pstack checkout> --record <record file> [--record ...] --attestation <verdict file> --identity "<Name> <email>" --work <new folder> [--json]
 python -I -B <shared checkout>/mrs operation inspect|apply|reconcile --work <operation folder> [--json]
 python -I -B <shared checkout>/mrs page prepare --repository https://github.com/<owner>/<name> --tag <N> --title "<title>" --notes <file> --principal <login> --work <new folder> [--json]
 python -I -B <shared checkout>/mrs page apply --work <folder> --operation-sha256 <granted digest> [--json]
@@ -79,7 +79,7 @@ Page commands use the same codes: `0` PREPARED, COMPLETED, APPLIED or NOOP; `1` 
 - `verifier`: `relationship` (must be `non-author`), `statement` (why the verifier is a non-author) and `harness` (the actual harness, tools and substitutions).
 - `behavior` and `evidence`: what was inspected.
 - `limitations`: each one `accepted` or `unresolved`.
-- `reuse`: each proposed reused observation, `accepted` or `rejected`, with a rationale. An observation names its `id`, exact `source_commit`, `harness` and `scope`.
+- `reuse`: `[]` under the agent-integration gate in `docs/verification.md`, which the verdict applies and the tool does not enforce. Releases up to 26.2.0 recorded reused agent observations here, so the tool still checks each entry's form: `accepted` or `rejected` with a rationale, naming its `id`, exact `source_commit`, `harness` and `scope`.
 - `verdict`: `PASS` or `FAIL`.
 
 Tests and the recipe for this project's own records: `docs/verification.md`.
