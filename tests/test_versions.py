@@ -24,6 +24,27 @@ class LauncherTests(unittest.TestCase):
             self.assertIn("unsupported batch launcher", str(caught.exception))
 
 
+class ResolutionTests(unittest.TestCase):
+    def test_git_in_the_working_directory_or_a_relative_path_entry_is_never_run(self):
+        """Portability: only absolute PATH entries name git; a git planted in the working directory (Windows
+        searches it implicitly) or behind a relative entry such as `.` is never run."""
+        cwd = os.getcwd()
+        with tempfile.TemporaryDirectory(prefix="mrs planted ") as planted:
+            fake = Path(planted) / ("git.exe" if os.name == "nt" else "git")
+            fake.write_bytes(b"")
+            fake.chmod(0o755)
+            os.chdir(planted)
+            try:
+                for name, path in (("working directory", os.environ["PATH"]),
+                                   ("relative entry", os.curdir + os.pathsep + os.environ["PATH"])):
+                    with self.subTest(name), mock.patch.dict(os.environ, {"PATH": path}):
+                        git.executable.cache_clear()
+                        self.assertFalse(os.path.samefile(os.path.dirname(git.executable()), planted))
+            finally:
+                os.chdir(cwd)
+                git.executable.cache_clear()
+
+
 class VersionTests(unittest.TestCase):
     def test_canonical_versions_parse_and_others_fail(self):
         """Unsupported: malformed versions fail clearly."""
