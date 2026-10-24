@@ -16,12 +16,11 @@ its start and finish times and its output identity. Receipt replay applies the s
 from __future__ import annotations
 
 import hashlib
-import json
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from . import config, sources
+from . import config, git, sources
 
 ACCEPTANCE_FORMAT = "multi-repo-stack/acceptance/1"
 ATTESTATION_FORMAT = "multi-repo-stack/attestation/1"
@@ -39,8 +38,7 @@ _OBSERVATION_KEYS = {"id", "source_commit", "harness", "scope"}
 _RUNNER_KEYS = {"os", "wsl", "platform", "python", "git"}
 _PSTACK_KEYS = {"repository", "commit", "path", "tree"}
 _DEV = "refs/heads/dev"  # where collection observes C (state.DEV; state imports this module)
-_STAMP = "%Y-%m-%dT%H:%M:%SZ"
-_OID = re.compile(r"[0-9a-f]{40,}")
+STAMP = "%Y-%m-%dT%H:%M:%SZ"  # UTC, as collection writes it
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 
 
@@ -55,13 +53,9 @@ class Assessment:
 
 
 def _json(data: bytes, what: str):
-    def no_duplicates(pairs):
-        if len({key for key, _ in pairs}) != len(pairs):
-            raise ValueError(f"duplicate keys in {what}")
-        return dict(pairs)
     try:
-        return json.loads(data.decode("utf-8"), object_pairs_hook=no_duplicates)
-    except (UnicodeDecodeError, ValueError) as exc:
+        return config.strict_json(data)
+    except ValueError as exc:
         raise ValueError(f"{what} is not UTF-8 JSON: {exc}") from None
 
 
@@ -76,7 +70,7 @@ def _sha256(value) -> bool:
 def _utc(value) -> bool:
     """A UTC time exactly as collection writes it, so that such times also order as text."""
     try:
-        return isinstance(value, str) and datetime.strptime(value, _STAMP).strftime(_STAMP) == value
+        return isinstance(value, str) and datetime.strptime(value, STAMP).strftime(STAMP) == value
     except ValueError:
         return False
 
@@ -121,7 +115,7 @@ def _source(pstack) -> bool:
     return (isinstance(pstack, dict) and set(pstack) == _PSTACK_KEYS
             and all(isinstance(pstack[key], str) for key in _PSTACK_KEYS)
             and _text(pstack["repository"]) and _text(pstack["path"])
-            and bool(_OID.fullmatch(pstack["commit"])) and bool(_OID.fullmatch(pstack["tree"])))
+            and bool(git.OID.fullmatch(pstack["commit"])) and bool(git.OID.fullmatch(pstack["tree"])))
 
 
 def _execution(result, observed_at: str | None) -> str | None:
@@ -185,7 +179,7 @@ def _record(record, selection: config.Selection, facts: dict) -> tuple[list[str]
 def _observation_problem(item) -> str | None:
     if (not isinstance(item, dict) or set(item) != _OBSERVATION_KEYS
             or not all(_text(item[key]) for key in ("id", "harness", "scope"))
-            or not isinstance(item["source_commit"], str) or not _OID.fullmatch(item["source_commit"])):
+            or not isinstance(item["source_commit"], str) or not git.OID.fullmatch(item["source_commit"])):
         return f"reused observation {item!r} must name its id, exact source commit, harness and scope"
     return None
 

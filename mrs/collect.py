@@ -13,16 +13,14 @@ from __future__ import annotations
 import hashlib
 import os
 import platform
-import shutil
 import stat
 import subprocess
 import sys
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
 from . import config, git, sources, state
-from .acceptance import MAX_EVIDENCE_BYTES, RECORD_FORMAT
+from .acceptance import MAX_EVIDENCE_BYTES, RECORD_FORMAT, STAMP
 
 EVIDENCE_ENV = "MRS_EVIDENCE_FILE"
 _EVIDENCE_NAME = "evidence.txt"
@@ -35,15 +33,8 @@ class Refused(Exception):
     pass
 
 
-def remove_tree(path) -> None:
-    def retry(function, target, _info):
-        os.chmod(target, stat.S_IWRITE)
-        function(target)
-    shutil.rmtree(path, onerror=retry) if sys.version_info < (3, 12) else shutil.rmtree(path, onexc=retry)
-
-
 def _utc() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return datetime.now(timezone.utc).strftime(STAMP)
 
 
 def runner() -> dict:
@@ -58,21 +49,14 @@ def collect(repository: str, pstack: Path | None) -> tuple[dict, dict[str, bytes
     """Run the applicable checks of the observed dev's exact commit. Returns the public-safe record, each
     pair's exact combined output (private: it may name local paths) and whether a source change during the
     run invalidated every result."""
-    scratch = Path(tempfile.mkdtemp(prefix="mrs-collect-"))
     try:
-        return _collect(scratch, repository, pstack)
+        with git.scratch_store("mrs-collect-") as store:
+            return _collect(store, repository, pstack)
     except (config.ConfigError, sources.SourceError, state.Redirected) as exc:
         raise Refused(str(exc)) from None
-    finally:
-        try:
-            remove_tree(scratch)
-        except OSError as exc:
-            print(f"warning: collection scratch was not removed: {exc}", file=sys.stderr)
 
 
-def _collect(scratch: Path, repository: str, pstack: Path | None) -> tuple[dict, dict[str, bytes], bool]:
-    store = scratch / "store.git"
-    git.check(["init", "--quiet", "--bare", "--template=", str(store)])
+def _collect(store: Path, repository: str, pstack: Path | None) -> tuple[dict, dict[str, bytes], bool]:
     observed = state.observe(store, repository)  # dev, its selector and VERSION, read from fetched objects
     at = _utc()
     candidate = observed.dev
@@ -95,7 +79,7 @@ def _collect(scratch: Path, repository: str, pstack: Path | None) -> tuple[dict,
           f"tree {pinned['tree']}: {len(applicable)} pair(s) on {host['os']}", file=sys.stderr)
     results, outputs = [], {}
     for index, (name, label) in enumerate(applicable):
-        result, output = _run(scratch / str(index), store, candidate, entries, name, label, selection.checks[name])
+        result, output = _run(store.parent / str(index), store, candidate, entries, name, label, selection.checks[name])
         results.append(result)
         outputs[f"{name}.{label}"] = output
     try:
@@ -120,11 +104,7 @@ def _collect(scratch: Path, repository: str, pstack: Path | None) -> tuple[dict,
 def _entries(store: Path, commit: str) -> list[tuple[str, str, str]]:
     """C's tracked entries, refusing those an isolated checkout here cannot reproduce exactly."""
     entries = []
-    for item in git.check(["-C", str(store), "ls-tree", "-r", "-z", "--full-tree", commit]).stdout.split(b"\0"):
-        if not item:
-            continue
-        meta, raw = item.split(b"\t", 1)
-        mode, _, oid = meta.decode("ascii").split(" ")
+    for mode, _, oid, raw in git.ls_tree(store, commit, recursive=True):
         try:
             name = raw.decode("utf-8")
         except UnicodeDecodeError:

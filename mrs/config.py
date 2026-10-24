@@ -15,7 +15,6 @@ APPLICABILITY = ("context", "lifecycle")
 NATIVE_OS = ("windows", "linux", "macos")  # execution OS; WSL is linux
 
 _REPOSITORY = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[a-z0-9]+(?:-[a-z0-9]+)*")
-_OID = re.compile(r"[0-9a-f]{40,}")
 _SUBTREE = re.compile(r"[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*")
 _LABEL = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 
@@ -49,11 +48,16 @@ class Selection:
     criteria: str | None = None  # SHA-256 of the canonical checks and environments: the criteria identity
 
 
-def _reject_duplicates(pairs):
-    keys = [key for key, _ in pairs]
-    if len(keys) != len(set(keys)):
-        raise ConfigError(f"duplicate keys in {FILENAME}: ambiguous selection")
-    return dict(pairs)
+def strict_json(data: bytes):
+    """JSON as this tool reads every format: UTF-8, without duplicate keys, NaN or Infinity. Raises ValueError."""
+    def unique(pairs):
+        if len({key for key, _ in pairs}) != len(pairs):
+            raise ValueError("duplicate keys")
+        return dict(pairs)
+
+    def constant(name):
+        raise ValueError(f"{name} is not JSON")
+    return json.loads(data.decode("utf-8"), object_pairs_hook=unique, parse_constant=constant)
 
 
 def _object(value, keys: set[str], where: str) -> dict:
@@ -69,15 +73,15 @@ def _repository(value, where: str) -> str:
 
 
 def _commit(value, where: str) -> str:
-    if not isinstance(value, str) or not _OID.fullmatch(value):
+    if not isinstance(value, str) or not git.OID.fullmatch(value):
         raise ConfigError(f"{where} must be a full lowercase commit ID, not a branch or abbreviation: {value!r}")
     return value
 
 
 def parse(data: bytes) -> Selection:
     try:
-        raw = json.loads(data.decode("utf-8"), object_pairs_hook=_reject_duplicates)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raw = strict_json(data)
+    except ValueError as exc:
         raise ConfigError(f"{FILENAME} is not valid UTF-8 JSON: {exc}") from None
     if not isinstance(raw, dict):
         raise ConfigError(f"{FILENAME} must be a JSON object")

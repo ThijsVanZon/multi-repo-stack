@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+import contextlib
 import functools
 import os
+import re
+import shutil
+import stat
 import subprocess
+import sys
+import tempfile
 import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
+
+OID = re.compile(r"[0-9a-f]{40,}")
 
 # Variables that would silently redirect commands to another repository or index, inject the
 # command-line configuration of a parent Git process (e.g. when run from a hook), make `git config`
@@ -82,6 +90,29 @@ def run(args: list[str], *, cwd: Path | str | None = None, input: bytes | None =
     return Result(proc.returncode, proc.stdout, proc.stderr)
 
 
+def remove_tree(path) -> None:
+    def retry(function, target, _info):
+        os.chmod(target, stat.S_IWRITE)
+        function(target)
+    shutil.rmtree(path, onerror=retry) if sys.version_info < (3, 12) else shutil.rmtree(path, onexc=retry)
+
+
+@contextlib.contextmanager
+def scratch_store(prefix: str):
+    """A new private bare repository in a new temporary folder, removed afterwards; a removal failure is only
+    reported, so it never replaces the result."""
+    scratch = tempfile.mkdtemp(prefix=prefix)
+    try:
+        store = Path(scratch) / "store.git"
+        check(["init", "--quiet", "--bare", "--template=", str(store)])
+        yield store
+    finally:
+        try:
+            remove_tree(scratch)
+        except OSError as exc:
+            print(f"warning: scratch {scratch} was not removed: {exc}", file=sys.stderr)
+
+
 def scheme(location: str | Path) -> str | None:
     """The URL scheme of a repository location, or None for a local path (a drive letter is not a scheme)."""
     found = urllib.parse.urlsplit(str(location)).scheme
@@ -120,15 +151,21 @@ def is_ancestor(repo: Path, ancestor: str, descendant: str) -> bool:
     raise GitError(f"ancestry of {ancestor} and {descendant} is unknown: {result.err}")
 
 
+def ls_tree(repo: Path, commit: str, *paths: str, recursive: bool = False) -> list[tuple[str, str, str, bytes]]:
+    """(mode, type, oid, name) of each entry at commit, root-relative; names stay the bytes Git stores."""
+    args = ["-C", str(repo), "ls-tree", "-z", "--full-tree", *(["-r"] if recursive else []), commit, "--", *paths]
+    entries = []
+    for record in filter(None, check(args).stdout.split(b"\0")):
+        meta, name = record.split(b"\t", 1)
+        mode, kind, oid = meta.decode("ascii").split(" ")
+        entries.append((mode, kind, oid, name))
+    return entries
+
+
 def tree_entry(repo: Path, commit: str, path: str) -> tuple[str, str, str] | None:
     """(mode, type, oid) of one root-relative path at commit, or None when absent."""
-    out = check(["-C", str(repo), "ls-tree", "-z", "--full-tree", commit, "--", path]).stdout
-    for record in out.split(b"\0"):
-        if not record:
-            continue
-        meta, name = record.split(b"\t", 1)
+    for mode, kind, oid, name in ls_tree(repo, commit, path):
         if name.decode("utf-8") == path:
-            mode, kind, oid = meta.decode("ascii").split(" ")
             return mode, kind, oid
     return None
 

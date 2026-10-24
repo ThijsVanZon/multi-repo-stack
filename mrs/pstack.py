@@ -12,7 +12,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from . import collect, git, sources
+from . import git, sources
 
 # Each client's tree at the pin, loaded byte for byte; upstream generates the Claude Code tree from pstack/.
 TREES = {"claude-code": "harness/pstack/claude-code", "cursor": None}  # None: the selector's own pstack path
@@ -30,11 +30,8 @@ def default_cache() -> Path:
 
 def _tree(repo: Path, commit: str, path: str) -> dict[str, tuple[bytes, bool]]:
     """Exact committed bytes and executable bits under `path` at `commit`, read from Git objects only."""
-    listing = git.check(["-C", str(repo), "ls-tree", "-r", "-z", "--full-tree", commit, "--", path]).stdout
     entries = []
-    for record in filter(None, listing.split(b"\0")):
-        meta, name = record.split(b"\t", 1)
-        mode, kind, oid = meta.decode("ascii").split(" ")
+    for mode, kind, oid, name in git.ls_tree(repo, commit, path, recursive=True):
         if kind != "blob" or mode not in ("100644", "100755"):
             raise sources.SourceError(f"pstack entry {name.decode('utf-8', 'replace')!r} (mode {mode}) is unsupported")
         entries.append((name.decode("utf-8")[len(path) + 1:], oid, mode == "100755"))
@@ -104,7 +101,7 @@ def sync(consumer: Path, pstack: Path | None, client: str, cache: Path) -> dict:
                     raise
         finally:
             if partial.exists():
-                collect.remove_tree(partial)
+                git.remove_tree(partial)
     if _digest(_read(entry)) != digest:
         raise sources.SourceError(f"cache entry {entry} differs from its content digest; it was changed after it "
                                   "was written, and is never repaired here")

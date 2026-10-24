@@ -70,7 +70,7 @@ def _utc(now: datetime | None) -> datetime:
     return now.astimezone(timezone.utc).replace(microsecond=0)
 
 
-def _destination(remote) -> str:
+def explicit_destination(remote) -> str:
     """The one explicit destination. Relative paths, remote names and scp-like addresses are ambiguous, and a URL
     carrying a password would write a credential into the operation record. A refused URL is not repeated, since
     it may carry one."""
@@ -104,7 +104,7 @@ def is_fixture(destination: str) -> bool:
     return git.scheme(destination) is None and (Path(destination) / FIXTURE_MARKER).is_file()
 
 
-def _tool(destination: str) -> dict:
+def required_tool(destination: str) -> dict:
     """The running tool's identity, recorded with an operation. A real target needs a clean committed checkout."""
     identity = sources.tool_identity()
     if not identity["clean"] and not is_fixture(destination):
@@ -122,7 +122,7 @@ def _resolves_to_itself(store: Path, destination: str) -> None:
         raise Refused("destination", str(exc)) from None
 
 
-def _new_store(work: Path) -> Path:
+def new_store(work: Path) -> Path:
     if not work.is_absolute():
         raise Refused("work", "the operation directory must be an absolute path")
     if work.exists() and any(work.iterdir()):
@@ -183,13 +183,13 @@ def load(work: Path) -> dict:
     if not bound.ok or bound.stdout != _bound(operation):
         raise Refused("operation", f"{path} does not name the kind, destination, tool and expected values that its "
                                    "store bound at preparation")
-    destination = _destination(operation["remote"])
+    destination = explicit_destination(operation["remote"])
     running = sources.tool_identity()
     if running != operation["tool"]:
         raise Refused("tool", f"the operation was prepared by the tool at {operation['tool']}, but the running tool "
                               f"is {running}; inspect, apply and reconcile it with the tool that prepared it")
     if not is_fixture(destination):
-        _tool(destination)
+        required_tool(destination)
         if kind == "release" and judged.get("format") != acceptance_module.ACCEPTANCE_FORMAT:
             raise Refused("acceptance", f"{path}: a real target is released only with an assessed acceptance")
     return operation
@@ -241,7 +241,7 @@ def prepare_bootstrap(*, source: Path, commit: str, remote: str | Path, work: Pa
                       pstack: Path | None = None) -> dict:
     """Prepare creation of dev at exact `commit` (B) from a local source repository. For a real target the
     running tool and `pstack` must be the clean sources B selects."""
-    destination = _destination(remote)
+    destination = explicit_destination(remote)
     if git.scheme(source) is not None or not Path(source).is_absolute():
         raise Refused("source", f"the source of B must be an absolute path to a local repository, not {source}")
     if not is_fixture(destination):  # before any scratch: the running tool and pstack are the sources B selects
@@ -255,8 +255,8 @@ def prepare_bootstrap(*, source: Path, commit: str, remote: str | Path, work: Pa
             raise Refused("candidate", str(exc)) from None
         except sources.SourceError as exc:
             raise Refused("source", str(exc)) from None
-        _tool(destination)
-    store = _new_store(Path(work))
+        required_tool(destination)
+    store = new_store(Path(work))
     _resolves_to_itself(store, destination)
     fetched = git.run(["-C", str(store), "-c", "gc.auto=0", "fetch", "--quiet", "--no-tags", "--no-write-fetch-head",
                        "--recurse-submodules=no", "--", str(source), f"{commit}:refs/mrs/op/bootstrap"],
@@ -274,7 +274,7 @@ def prepare_bootstrap(*, source: Path, commit: str, remote: str | Path, work: Pa
         raise Refused("candidate", str(exc)) from None
     operation = {"format": OPERATION_FORMAT, "kind": "bootstrap", "repository": selection.repository,
                  "remote": destination, "version": str(version), "expected": {DEV: None}, "updates": {DEV: commit},
-                 "tool": _tool(destination)}
+                 "tool": required_tool(destination)}
     current = _classify(store, destination, operation)
     if current.status == "UNKNOWN":
         raise state.Unknown(current.detail)
@@ -289,15 +289,12 @@ def _next_line_commit(store: Path, candidate: str, current: versions.Version, fo
     blob = git.check(["-C", str(store), "hash-object", "-w", "--no-filters", "--stdin"],
                      input=versions.file_bytes(following)).out
     entries = []
-    for record in git.check(["-C", str(store), "ls-tree", "-z", candidate]).stdout.split(b"\0"):
-        if not record:
-            continue
-        meta, name = record.split(b"\t", 1)
+    for mode, kind, oid, name in git.ls_tree(store, candidate):
         if name == b"VERSION":
-            if not meta.startswith(b"100644 blob "):
+            if (mode, kind) != ("100644", "blob"):
                 raise Refused("version", "VERSION must be a regular non-executable file")
-            record = b"100644 blob " + blob.encode("ascii") + b"\tVERSION"
-        entries.append(record + b"\0")
+            oid = blob
+        entries.append(f"{mode} {kind} {oid}\t".encode("ascii") + name + b"\0")
     tree = git.check(["-C", str(store), "mktree", "-z", "--missing"], input=b"".join(entries)).out
     message = f"Open line {following} after release {current}\n\n{state.OPENED_LINE}{opened.isoformat()}\n"
     return git.check(["-C", str(store), "-c", "i18n.commitEncoding=UTF-8", "commit-tree", "--no-gpg-sign", tree,
@@ -309,7 +306,7 @@ def prepare_release(*, remote: str | Path, work: Path, candidate: str, acceptanc
     """Prepare the atomic promotion of exact integrated `candidate` (C) with receipt tag T and next line D.
     Low-level fixture path: `acceptance` is recorded, not judged, and cannot claim the assessed format;
     prepare_accepted_release is the checked path, and the only one for a real target."""
-    if not is_fixture(_destination(remote)):
+    if not is_fixture(explicit_destination(remote)):
         raise Refused("acceptance", "an unjudged acceptance payload is only for disposable fixtures; a real target "
                                     "is released only from a SUFFICIENT assessment (prepare_accepted_release)")
     if not isinstance(acceptance, dict) or set(acceptance) != {"criteria", "results", "verdict"}:
@@ -334,9 +331,9 @@ def _prepare_release(remote: str | Path, work: Path, candidate: str, payload, id
                      now: datetime | None) -> dict:
     now = _utc(now)
     env = _identity_env(identity, now)
-    destination = _destination(remote)
-    tool = _tool(destination)
-    store = _new_store(Path(work))
+    destination = explicit_destination(remote)
+    tool = required_tool(destination)
+    store = new_store(Path(work))
     _resolves_to_itself(store, destination)
     observed = state.observe(store, destination)
     if observed.applicability not in (None, "lifecycle"):
@@ -524,7 +521,7 @@ def push(work: Path, *, now: datetime | None = None) -> str:
     Refused, or state.Unknown. A disposable fixture is pushed in any state, so tests can show the leases reject."""
     work = Path(work)
     operation, store = load(work), work / STORE
-    destination = _destination(operation["remote"])
+    destination = explicit_destination(operation["remote"])
     _resolves_to_itself(store, destination)
     if not is_fixture(destination):
         before = _ready(store, destination, operation, _utc(now))
@@ -539,7 +536,7 @@ def reconcile(work: Path) -> Outcome:
     """Read-only comparison of the prepared operation with the target's current state."""
     work = Path(work)
     operation, store = load(work), work / STORE
-    destination = _destination(operation["remote"])
+    destination = explicit_destination(operation["remote"])
     try:
         _resolves_to_itself(store, destination)
     except state.Unknown as exc:
@@ -553,7 +550,7 @@ def apply(work: Path, *, now: datetime | None = None) -> Outcome:
     store = work / STORE
     try:
         operation = load(work)
-        destination = _destination(operation["remote"])
+        destination = explicit_destination(operation["remote"])
         _resolves_to_itself(store, destination)
     except Refused as exc:
         return Outcome("REFUSED", exc.code, exc.detail)

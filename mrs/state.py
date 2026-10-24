@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
@@ -21,8 +20,6 @@ OPENED_LINE = "Next-line opening date (UTC): "
 OBSERVED = "refs/mrs/observed/"
 PROBE_REMOTE = "mrs-destination"
 DEV, MAIN = "refs/heads/dev", "refs/heads/main"
-
-_OID = re.compile(r"[0-9a-f]{40,}")
 
 
 class Unknown(Exception):
@@ -110,7 +107,7 @@ def snapshot(store: Path, remote: str) -> dict[str, str]:
     refs: dict[str, str] = {}
     for line in text.splitlines():
         oid, sep, name = line.partition("\t")
-        if not sep or not _OID.fullmatch(oid) or not name:
+        if not sep or not git.OID.fullmatch(oid) or not name:
             raise Unknown(f"unparseable ls-remote line: {line!r}")
         if not oid.strip("0"):
             raise Unknown(f"broken ref reported as a null object ID: {name}")
@@ -157,7 +154,7 @@ def exact_commit(store: Path, value, what: str, width: int) -> str:
     """A full commit ID naming itself; names, abbreviations, IDs of another object format (`width` is
     the length of IDs in this repository) and other object types are malformed. A well-formed ID whose
     object is missing is UNKNOWN."""
-    if not isinstance(value, str) or len(value) != width or not _OID.fullmatch(value):
+    if not isinstance(value, str) or len(value) != width or not git.OID.fullmatch(value):
         raise Malformed(f"{what} must be a full object ID of this repository ({width} hex digits), got {value!r}")
     found = git.object_type(store, value)
     if found is None:
@@ -207,13 +204,9 @@ class Release:
 
 
 def _strict_json(data: bytes) -> dict:
-    def no_duplicates(pairs):
-        if len({key for key, _ in pairs}) != len(pairs):
-            raise Malformed("duplicate keys in receipt")
-        return dict(pairs)
     try:
-        value = json.loads(data.decode("ascii"), object_pairs_hook=no_duplicates)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        value = config.strict_json(data)
+    except ValueError as exc:
         raise Malformed(f"receipt is not canonical ASCII JSON: {exc}") from None
     if not isinstance(value, dict) or encode_receipt(value) != data:
         raise Malformed("receipt is not in canonical serialization")

@@ -18,12 +18,11 @@ import os
 import re
 import ssl
 import subprocess
-import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import collect, git, sources, state, transactions
+from . import config, git, sources, state, transactions
 
 API, API_HOST, API_VERSION = "https://api.github.com", "github.com", "2022-11-28"
 TIMEOUT = 60  # seconds, for connecting and for each read
@@ -120,17 +119,7 @@ def credential() -> str:
 
 
 def _strict(data: bytes):
-    def unique(pairs):
-        if len({key for key, _ in pairs}) != len(pairs):
-            raise ValueError("duplicate keys")
-        return dict(pairs)
-
-    def constant(name):
-        raise ValueError(f"{name} is not JSON")
-    text = data.decode("utf-8")
-    if text.startswith("﻿"):
-        raise ValueError("byte order mark")
-    value = json.loads(text, object_pairs_hook=unique, parse_constant=constant)
+    value = config.strict_json(data)  # a byte order mark is not JSON either
     json.dumps(value, ensure_ascii=False).encode("utf-8")  # UnicodeEncodeError: a lone surrogate is not text
     return value
 
@@ -240,9 +229,9 @@ def prepare(*, destination: str, tag: str, title: str, notes: Path, principal: s
         raise Stop("REFUSED", "notes", "the notes must be non-empty, LF-only and without NUL")
     slug = _slug(api, destination)
     try:
-        destination = transactions._destination(destination)
-        tool = transactions._tool(destination)
-        store = transactions._new_store(Path(work))
+        destination = transactions.explicit_destination(destination)
+        tool = transactions.required_tool(destination)
+        store = transactions.new_store(Path(work))
         state.check_destination(store, destination)
         observed = state.observe(store, destination)
     except transactions.Refused as exc:
@@ -311,15 +300,11 @@ def load(work: Path, granted: str | None = None) -> tuple[dict, bytes, bytes]:
 
 def _tag(record: dict) -> None:
     """Tag N, listed from a private temporary store that is removed before returning."""
-    scratch = tempfile.mkdtemp(prefix="mrs-page-")
     try:
-        store = Path(scratch) / "observe.git"
-        git.check(["init", "--quiet", "--bare", "--template=", str(store)])
-        seen = state.snapshot(store, record["destination"]).get(f"refs/tags/{record['tag']}")
+        with git.scratch_store("mrs-page-") as store:
+            seen = state.snapshot(store, record["destination"]).get(f"refs/tags/{record['tag']}")
     except (OSError, state.Unknown, state.Redirected, git.GitError) as exc:
         raise Stop("UNKNOWN", "git", str(exc)) from None
-    finally:
-        collect.remove_tree(scratch)
     if seen != record["tag_object"]:
         raise Stop("DIVERGED", "tag", f"refs/tags/{record['tag']} is {seen or 'absent'}, not the release tag "
                                       f"{record['tag_object']}; a page never creates, moves or repairs a tag")
