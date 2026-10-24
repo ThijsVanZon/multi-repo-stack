@@ -7,4 +7,5 @@
 - **Substance.** Commit the minimum necessary. Every committed line is a permanent liability that must justify itself through clear product or repository value. Prefer deletion, reuse and simplification over addition, and add no speculative machinery. Minimize total system liability, not line count.
 - **Verification.** Keep one harness-neutral verification recipe, routed from `AGENTS.md`, rather than per-harness copies such as pstack's `.cursor/skills/verify-<app>/` or a project-local formal verification skill. pstack's create and maintain methods for both still apply to that recipe.
 - **Context-only consumers** keep their own branch, version and release rules. Lifecycle operations refuse them.
+- **Approval.** Content lands only with the approval of the person who directs the work.
 - Neither a selector nor these instructions grant any push, release, provider or downstream authority.
