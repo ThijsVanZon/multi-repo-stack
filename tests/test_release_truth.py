@@ -1,3 +1,7 @@
+import json
+from types import SimpleNamespace
+from unittest import mock
+
 from mrs import state, transactions
 from mrs.transactions import Refused
 from tests.support import (DEV, MAIN, NOW, GitTestCase, forge_tag, out, refs, selector, shared_snapshot,
@@ -30,6 +34,8 @@ class ForgedReceiptTests(GitTestCase):
             kwargs["repository"] = "example/other"
         if mutate == "NaN in receipt":
             kwargs["acceptance"] = {**simulated_acceptance(), "verdict": float("nan")}
+        if mutate.endswith("1e400 in receipt"):  # json.dumps never writes such a literal, so swap one in
+            kwargs["acceptance"] = {**simulated_acceptance(), "verdict": 0.125}
         if mutate == "duplicate object header":
             unrelated = self.commit(self.checkout("unrelated"), {"x": "x\n"}, "unrelated")
             out("-C", clone, "fetch", "--quiet", self.tmp / "unrelated", unrelated)
@@ -37,7 +43,9 @@ class ForgedReceiptTests(GitTestCase):
                                 f"tagger F <f@example.invalid> 1790000000 +0000\nobject {c}\n")
         next_commit = {"abbreviated next commit": d[:12], "overlong next commit": d + "0",
                        "missing next commit": "1" * len(d)}.get(mutate, d)
-        tag = forge_tag(clone, "26.1.0", c, next_commit, "26.2.0", **kwargs)
+        literal = SimpleNamespace(dumps=lambda *a, **k: json.dumps(*a, **k).replace("0.125", mutate.split()[0]))
+        with mock.patch("tests.support.json", literal):
+            tag = forge_tag(clone, "26.1.0", c, next_commit, "26.2.0", **kwargs)
         out("-C", clone, "push", "--quiet", "--no-follow-tags", "--force", "origin",
             f"{c}:refs/heads/main", f"{tag}:refs/tags/26.1.0", f"{d}:refs/heads/dev")
         return target, d
@@ -60,6 +68,8 @@ class ForgedReceiptTests(GitTestCase):
             "abbreviated next commit": "must be a full object ID",
             "overlong next commit": "must be a full object ID",
             "NaN in receipt": "receipt is not canonical ASCII JSON",
+            "1e400 in receipt": "1e400 is not a finite number",
+            "-1e400 in receipt": "-1e400 is not a finite number",
         }
         for mutate, message in cases.items():
             with self.subTest(mutate):

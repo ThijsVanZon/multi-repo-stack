@@ -177,7 +177,7 @@ def _assess(args) -> int:
             "problems": result.problems, "missing": result.missing, "acceptance": result.payload}, args.json, [
         f"ASSESSMENT {result.status}: {meaning[result.status]}",
         f"candidate {result.candidate}",
-        *([f"criteria  identity={result.criteria['identity']}  previous={result.criteria['previous']}"]
+        *([f"criteria  identity={result.criteria['identity']}  previous={result.criteria['previous'] or 'null'}"]
           if result.criteria else []),
         *[f"refused   {problem}" for problem in result.problems],
         *[f"missing   {item}" for item in result.missing],
