@@ -12,15 +12,15 @@
 - **pstack under this lifecycle** (deliberate, narrow adaptations of the pinned pstack):
   - Trunk is `dev`, not `main`, because `main` moves only by release. Root PRs target `dev`; a stacked child targets its same-line parent task branch.
   - Branch names carry the active line, so a task's line is visible and checkable.
-  - Shipping lands verified PRs on `dev` only. A release is a separate operation, never a PR into `main`. A task verdict that survives a rebase under Shipping's patch-id rule never carries release acceptance.
+  - Shipping lands verified PRs on `dev` only. A release is a separate operation, never a PR into `main`.
   - Before merge, the PR brings every standing document it affects (README.md, `docs/`, agent instructions) into line with the result, so they stay aligned with `dev`. Every squash merge sets its message explicitly, never GitHub's default: the subject is `<PR title> (#<N>)`, the body a short summary of the change, and `Co-Authored-By` the only trailer. No session links, attribution lines or AI footers. A landing is complete only once its task branch no longer exists on the remote.
   - Rewriting a task branch (rebase, amend) is pstack's business. `dev`, `main` and release tags are never rewritten.
 - **Bootstrap** creates only `refs/heads/dev`, at an exact prepared commit, on an empty target. It never adopts or overwrites a nonempty repository.
 - **Acceptance** of the integrated commit C needs two things:
   - a passing record for every check/environment pair that C's own `multi-repo-stack.json` requires, each collected on an isolated checkout of exactly C by a runner on that environment's native OS;
-  - a PASS verdict from a separately commissioned non-author, neither the session that wrote the change nor whoever directs and approves it, bound to exact C and its criteria.
+  - a PASS verdict from a pre-release review, by a non-author as defined in `docs/context.md` Pre-merge review, bound to exact C and its criteria.
 
-  Passing checks alone never accept C. Neither does a verdict on another commit or on a PR merge.
+  Passing checks alone never accept C. Neither does a verdict on another commit or a pre-merge verdict.
 - **Release** promotes the exact integrated commit C in one guarded atomic push, with explicit leases, `--no-follow-tags`, `--recurse-submodules=no` and no fallback:
   - `main` → C;
   - the annotated tag `N` (receipt embedded, directly targeting C);

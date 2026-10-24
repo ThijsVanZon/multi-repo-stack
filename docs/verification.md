@@ -44,7 +44,7 @@ python -I -B mrs assess --repository <scratch>/integration.git --pstack <pstack 
 The record's evidence lists the tests run, failures, errors and skips. `assess` stays INCOMPLETE until both of these hold:
 
 - every OS that `multi-repo-stack.json` names has a passing record for the same commit;
-- a separately commissioned non-author verdict binds that exact commit.
+- a pre-release review verdict binds that exact commit.
 
 Remove the scratch repository afterwards. Keep the record and its private logs.
 
@@ -55,8 +55,9 @@ The scratch repository's `dev` is a local mapping of the commit under test, made
 `.github/workflows/checks.yml` has read-only permissions. It never pushes, tags, comments, merges, changes settings or states a verdict. It pins its actions by commit and reads the pstack pin from `multi-repo-stack.json`. Each matrix row is one native OS (Linux, Windows, macOS) on Python 3.11, the declared minimum, and runs the full suite once.
 
 - **Pull requests** get task evidence. A `task` job runs `mrs task check` for the PR's head commit against the target's current state. Each row checks out the head commit, never GitHub's synthetic merge commit, and runs preflight and the suite. It keeps the runner facts, the preflight output and the suite summary. None of this is a record of an integrated C.
+- **Pre-merge review.** `.github/workflows/review.yml` turns a collaborator's verdict comment (`docs/context.md`) into the `pre-merge review` status on the exact head it names, and writes nothing else. The `dev` ruleset requires that status, so every new head needs a new PASS.
 - **Pushes to `dev`** get integrated evidence. Each row runs `mrs collect` against the target itself, from a checkout of the pushed commit. If `dev` has moved on by then, collection refuses, because this checkout is no longer the observed `dev`; the later push's run covers the new commit. A record names its candidate, so a later `dev` never relabels it.
-- **Retain the records.** Artifacts and logs expire after at most 90 days on a public repository. `gh run download <run> --dir <folder>` fetches every row's `record.json` and its private log; keep both outside every checkout. `assess` and `prepare release` read only the records (`--record`). A release's tag receipt then carries every record it was assessed with, including each log's size and SHA-256, but not the logs themselves. Acceptance still needs passing records from all three OSes for the same commit, and the non-author verdict.
+- **Retain the records.** Artifacts and logs expire after at most 90 days on a public repository. `gh run download <run> --dir <folder>` fetches every row's `record.json` and its private log; keep both outside every checkout. `assess` and `prepare release` read only the records (`--record`). A release's tag receipt then carries every record it was assessed with, including each log's size and SHA-256, but not the logs themselves. Acceptance still needs passing records from all three OSes for the same commit, and the pre-release review verdict.
 - A green PR run describes the target when it ran. CI is not a lock, and it proves nothing about GitHub's atomic release behavior. Check the task again immediately before landing.
 
 ## Evidence
@@ -87,7 +88,7 @@ Each test's docstring names the contract row it exercises. Every assertion reads
   - Exit 0: the entry path is unchanged. The verdict records that command and its result; no observation is needed.
   - Exit 1, any other exit, or a first release: one fresh session on C, in a harness this project uses, entering a lifecycle consumer that selects C. It reads `AGENTS.md`, runs preflight, loads the routed docs, reruns preflight with `--expect` after an explicit resume, and invokes the `mrs-handshake` skill. The verdict names the harness and what the session did.
 - **Provider:** behavior established through separately authorized tests.
-- **Independent verification:** a non-author verdict on the integrated release candidate.
+- **Pre-release review:** a non-author verdict on the integrated release candidate.
 
 **pstack pin review.** Before each release, compare the pstack pin with `cursor/plugins` `main`: fetch `refs/heads/main` into a scratch bare repository, then `git merge-base --is-ancestor <pin> FETCH_HEAD` (0: `main` contains the pin) and `git diff --exit-code --stat <pin> FETCH_HEAD -- pstack harness/pstack` (0: nothing changed; 1: changed). Any other exit, or a failed fetch, is an unknown result and says nothing about the clean pinned checkout that preflight verifies. A change is evaluated against `dev`: what of it touches what the tool or these documents rely on (tree paths, manifests, skills, hooks, the adapted workflow). Upgrading is a decision, never automatic, and the pin moves only through its own reviewed task, with its compatibility work, before the release candidate.
 

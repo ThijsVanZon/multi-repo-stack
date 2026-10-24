@@ -8,4 +8,5 @@
 - **Verification.** Keep one harness-neutral verification recipe, routed from `AGENTS.md`, rather than per-harness copies such as pstack's `.cursor/skills/verify-<app>/` or a project-local formal verification skill. pstack's create and maintain methods for both still apply to that recipe.
 - **Context-only consumers** keep their own branch, version and release rules. Lifecycle operations refuse them.
 - **Approval.** Content lands only with the approval of the person who directs the work.
+- **Pre-merge review.** A PR merges only after a PASS verdict on its exact head from a separately commissioned non-author, in any harness: neither the session that wrote the change nor whoever directs and approves it. For a behavior change, the verifier confirms the tests would catch its regression, for example by reverting the change. Each new head needs its own PASS, covering what changed since the last one. The verifier records the verdict as a PR comment whose first line is `PASS <head commit>` or `FAIL <head commit>`.
 - Neither a selector nor these instructions grant any push, release, provider or downstream authority.
