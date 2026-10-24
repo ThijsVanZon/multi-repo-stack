@@ -27,7 +27,7 @@ jobs:
           URL: ${{ github.event.comment.html_url }}
         run: |
           read -r verdict commit rest <<< "$(printf '%s\n' "$BODY" | head -n 1 | tr -d '\r')"
-          [[ -z "$rest" && "$commit" =~ ^[0-9a-f]{40}$ ]] || { echo "first line is not '<PASS|FAIL> <full head commit>'"; exit 1; }
+          [[ "$verdict" =~ ^(PASS|FAIL)$ && "$commit" =~ ^[0-9a-f]{40}$ && -z "$rest" ]] || { echo "first line is not '<PASS|FAIL> <full head commit>'"; exit 1; }
           head=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" --jq .head.sha)
           [ "$commit" = "$head" ] || { echo "the verdict names $commit, but the PR head is $head"; exit 1; }
           state=success; [ "$verdict" = PASS ] || state=failure
