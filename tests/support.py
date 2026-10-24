@@ -12,7 +12,6 @@ import json
 import os
 import shutil
 import signal
-import stat
 import subprocess
 import sys
 import tempfile
@@ -23,6 +22,7 @@ from pathlib import Path
 from unittest import mock
 
 from mrs import git as mrs_git
+from mrs.git import remove_tree
 from mrs import transactions
 from mrs.transactions import FIXTURE_MARKER, Identity
 
@@ -50,16 +50,6 @@ AMBIENT_GLOBAL_CONFIG = """[maintenance]
 [init]
 \tdefaultBranch = trunk
 """
-
-
-def remove_tree(path: Path) -> None:
-    def retry(function, target, _info):
-        os.chmod(target, stat.S_IWRITE)
-        function(target)
-    if sys.version_info >= (3, 12):
-        shutil.rmtree(path, onexc=retry)
-    else:
-        shutil.rmtree(path, onerror=retry)
 
 
 def simulated_acceptance() -> dict:
@@ -112,9 +102,11 @@ def tree_digest(path: Path) -> dict[str, str]:
 
 
 def forge_tag(repo: Path, name: str, candidate: str, next_commit: str, next_version: str, *,
-              opened: str = "2026-10-03", repository: str = "example/app", header: str | None = None) -> str:
+              opened: str = "2026-10-03", repository: str = "example/app", header: str | None = None,
+              acceptance: dict | None = None) -> str:
     """Hand-build a contract-shaped release tag with plumbing only (test code, independent of the tool)."""
-    receipt = {"acceptance": simulated_acceptance(), "candidate": candidate, "format": "multi-repo-stack/receipt/1",
+    receipt = {"acceptance": acceptance or simulated_acceptance(), "candidate": candidate,
+               "format": "multi-repo-stack/receipt/1",
                "next": {"commit": next_commit, "opened": opened, "version": next_version},
                "repository": repository, "version": name}
     header = header or (f"object {candidate}\ntype commit\ntag {name}\n"

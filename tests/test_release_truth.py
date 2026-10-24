@@ -1,6 +1,7 @@
 from mrs import state, transactions
 from mrs.transactions import Refused
-from tests.support import DEV, MAIN, NOW, GitTestCase, forge_tag, out, refs, selector, shared_snapshot
+from tests.support import (DEV, MAIN, NOW, GitTestCase, forge_tag, out, refs, selector, shared_snapshot,
+                           simulated_acceptance)
 
 OPENED = "Next-line opening date (UTC): 2026-10-03"
 
@@ -27,6 +28,8 @@ class ForgedReceiptTests(GitTestCase):
         kwargs = {}
         if mutate == "receipt names another repository":
             kwargs["repository"] = "example/other"
+        if mutate == "NaN in receipt":
+            kwargs["acceptance"] = {**simulated_acceptance(), "verdict": float("nan")}
         if mutate == "duplicate object header":
             unrelated = self.commit(self.checkout("unrelated"), {"x": "x\n"}, "unrelated")
             out("-C", clone, "fetch", "--quiet", self.tmp / "unrelated", unrelated)
@@ -56,6 +59,7 @@ class ForgedReceiptTests(GitTestCase):
             "duplicate object header": "header must be exactly one object, type, tag and tagger line",
             "abbreviated next commit": "must be a full object ID",
             "overlong next commit": "must be a full object ID",
+            "NaN in receipt": "receipt is not canonical ASCII JSON",
         }
         for mutate, message in cases.items():
             with self.subTest(mutate):

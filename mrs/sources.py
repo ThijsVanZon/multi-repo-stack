@@ -40,13 +40,8 @@ def verify_checkout(path: Path, commit: str, subtree: str | None = None, what: s
     if not status.ok or status.stdout:
         entries = [entry for entry in status.stdout.decode("utf-8", "replace").split("\0") if entry][:5]
         raise SourceError(f"{what} {path} has modified, untracked or ignored content: {entries or status.err}")
-    listing = git.check(["-C", str(path), "ls-tree", "-r", "-z", "--full-tree", commit, *spec]).stdout
     names, expected = [], []
-    for record in listing.split(b"\0"):
-        if not record:
-            continue
-        meta, name = record.split(b"\t", 1)
-        mode, kind, oid = meta.decode("ascii").split(" ")
+    for mode, kind, oid, name in git.ls_tree(path, commit, *([subtree] if subtree else []), recursive=True):
         if kind != "blob" or mode not in ("100644", "100755") or b"\n" in name:
             raise SourceError(f"{what} entry {name.decode('utf-8', 'replace')!r} (mode {mode}) is unsupported")
         names.append(name.decode("utf-8"))

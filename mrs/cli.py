@@ -11,13 +11,14 @@ import json
 import os
 import re
 import sys
-import tempfile
 from pathlib import Path
 
 from . import acceptance, collect, git, pages, pstack, sources, state, tasks, transactions
 
 OK, NOT_PASSED, REFUSED, UNKNOWN, INVALIDATED, MIXED = 0, 1, 3, 4, 5, 6
-_remove = collect.remove_tree
+_CODES = {**dict.fromkeys(("PASSED", "SUFFICIENT", "VALID", "PREPARED", "APPLIED", "NOOP", "COMPLETED"), OK),
+          **dict.fromkeys(("NOT PASSED", "INCOMPLETE", "INVALID", "NOT_APPLIED"), NOT_PASSED),
+          "REFUSED": REFUSED, "DIVERGED": REFUSED, "UNKNOWN": UNKNOWN, "INVALIDATED": INVALIDATED, "MIXED": MIXED}
 _IDENTITY = re.compile(r"(?P<name>[^<>\n]*[^<>\s])\s*<(?P<email>[^<>\s]+)>")
 
 
@@ -79,20 +80,15 @@ def _preflight(args) -> int:
 
 
 def _inspect(args) -> int:
-    scratch = tempfile.mkdtemp(prefix="mrs-inspect-")
     try:
-        store = Path(scratch) / "observed.git"
-        try:
-            git.check(["init", "--quiet", "--bare", "--template=", str(store)])
+        with git.scratch_store("mrs-inspect-") as store:
             observed = state.observe(store, args.remote)
-        except state.Redirected as exc:
-            _print({"kind": "REFUSED", "reason": str(exc)}, args.json, [f"state     REFUSED: {exc}"])
-            return REFUSED
-        except (state.Unknown, git.GitError) as exc:
-            _print({"kind": "UNKNOWN", "reason": str(exc)}, args.json, [f"state     UNKNOWN: {exc}"])
-            return UNKNOWN
-    finally:
-        _remove(scratch)
+    except state.Redirected as exc:
+        _print({"kind": "REFUSED", "reason": str(exc)}, args.json, [f"state     REFUSED: {exc}"])
+        return REFUSED
+    except (state.Unknown, git.GitError) as exc:
+        _print({"kind": "UNKNOWN", "reason": str(exc)}, args.json, [f"state     UNKNOWN: {exc}"])
+        return UNKNOWN
     report = {
         "kind": observed.kind, "refs": observed.refs, "problems": observed.problems,
         "repository": observed.repository, "applicability": observed.applicability,
@@ -153,7 +149,7 @@ def _collect(args) -> int:
         *[f"unmet     {u['check']}/{u['environment']} requires {u['os']}" for u in record["unmet"]],
         f"record    {out}",
     ])
-    return INVALIDATED if invalidated else OK if passed else NOT_PASSED
+    return _CODES[status]
 
 
 def _assess(args) -> int:
@@ -163,21 +159,17 @@ def _assess(args) -> int:
     except OSError as exc:
         _print({"status": "REFUSED", "reason": str(exc)}, args.json, [f"ASSESSMENT REFUSED: {exc}"])
         return REFUSED
-    scratch = tempfile.mkdtemp(prefix="mrs-assess-")
     try:
-        store = Path(scratch) / "observed.git"
-        git.check(["init", "--quiet", "--bare", "--template=", str(store)])
-        observed = state.observe(store, args.repository)
-        result = acceptance.assess(store, observed, observed.dev, records, attestation,
-                                   Path(args.pstack) if args.pstack else None)
+        with git.scratch_store("mrs-assess-") as store:
+            observed = state.observe(store, args.repository)
+            result = acceptance.assess(store, observed, observed.dev, records, attestation,
+                                       Path(args.pstack) if args.pstack else None)
     except state.Redirected as exc:
         _print({"status": "REFUSED", "reason": str(exc)}, args.json, [f"ASSESSMENT REFUSED: {exc}"])
         return REFUSED
     except (state.Unknown, git.GitError) as exc:
         _print({"status": "UNKNOWN", "reason": str(exc)}, args.json, [f"ASSESSMENT UNKNOWN: {exc}"])
         return UNKNOWN
-    finally:
-        _remove(scratch)
     meaning = {acceptance.SUFFICIENT: "every required pair passed and a PASS non-author verdict binds exact C",
                acceptance.INCOMPLETE: "not accepted; required evidence or the verdict is missing",
                acceptance.REFUSED: "not accepted; the evidence or verdict does not hold for exact C"}
@@ -190,27 +182,23 @@ def _assess(args) -> int:
         *[f"refused   {problem}" for problem in result.problems],
         *[f"missing   {item}" for item in result.missing],
     ])
-    return {acceptance.SUFFICIENT: OK, acceptance.INCOMPLETE: NOT_PASSED}.get(result.status, REFUSED)
+    return _CODES[result.status]
 
 
 def _task(args) -> int:
-    scratch = tempfile.mkdtemp(prefix="mrs-task-")
+    checkout = Path(args.checkout).resolve()
     try:
-        store = Path(scratch) / "observed.git"
-        git.check(["init", "--quiet", "--bare", "--template=", str(store)])
-        checkout = Path(args.checkout).resolve()
-        if args.task_command == "create":
-            report = tasks.create(store, args.repository, checkout, args.task)
-        else:
-            report = tasks.check(store, args.repository, checkout, args.branch, args.commit, args.base)
+        with git.scratch_store("mrs-task-") as store:
+            if args.task_command == "create":
+                report = tasks.create(store, args.repository, checkout, args.task)
+            else:
+                report = tasks.check(store, args.repository, checkout, args.branch, args.commit, args.base)
     except (tasks.Refused, state.Redirected) as exc:
         _print({"status": "REFUSED", "reason": str(exc)}, args.json, [f"TASK REFUSED: {exc}"])
         return REFUSED
     except (state.Unknown, git.GitError) as exc:
         _print({"status": "UNKNOWN", "reason": str(exc)}, args.json, [f"TASK UNKNOWN: {exc}"])
         return UNKNOWN
-    finally:
-        _remove(scratch)
     if args.task_command == "create":
         report["status"] = "CREATED"
         _print(report, args.json, [f"TASK CREATED: {report['branch']} at dev {report['commit']} of "
@@ -222,7 +210,7 @@ def _task(args) -> int:
         *[f"problem   {problem}" for problem in report["problems"]],
         "This describes the target as observed now; check again immediately before landing.",
     ])
-    return OK if report["status"] == "VALID" else NOT_PASSED
+    return _CODES[report["status"]]
 
 
 def _describe(operation: dict, work: Path) -> list[str]:
@@ -281,7 +269,6 @@ def _operation(args) -> int:
     work = _work(args.work)
     if args.operation_command == "apply":
         outcome = transactions.apply(work)
-        code = {"APPLIED": OK, "NOOP": OK, "REFUSED": REFUSED, "UNKNOWN": UNKNOWN, "MIXED": MIXED}[outcome.status]
     else:
         try:
             operation = transactions.load(work)
@@ -294,12 +281,10 @@ def _operation(args) -> int:
             outcome = transactions.reconcile(work)
         except transactions.Refused as exc:
             outcome = transactions.Outcome("REFUSED", exc.code, exc.detail)
-        code = {"COMPLETED": OK, "NOT_APPLIED": NOT_PASSED, "DIVERGED": REFUSED, "REFUSED": REFUSED,
-                "UNKNOWN": UNKNOWN, "MIXED": MIXED}[outcome.status]
     _print({"status": outcome.status, "reason": outcome.reason, "detail": outcome.detail, "refs": outcome.refs},
            args.json, [f"{args.operation_command.upper()} {outcome.status} ({outcome.reason}): {outcome.detail}",
                        *[f"ref       {ref} {oid}" for ref, oid in sorted((outcome.refs or {}).items())]])
-    return code
+    return _CODES[outcome.status]
 
 
 def _page(args) -> int:
@@ -328,8 +313,7 @@ def _page(args) -> int:
                                *[f"{key:<9} {report[key]}" for key in ("operation_sha256", "tag_object", "candidate",
                                                                        "request_sha256", "attempt") if key in report],
                                *([f"page      {page['id']} {page['html_url']}"] if page else [])])
-    return {"PREPARED": OK, "COMPLETED": OK, "APPLIED": OK, "NOOP": OK, "NOT_APPLIED": NOT_PASSED,
-            "UNKNOWN": UNKNOWN}.get(report["status"], REFUSED)
+    return _CODES[report["status"]]
 
 
 def _pstack(args) -> int:
